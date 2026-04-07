@@ -28,9 +28,14 @@ import sheets
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
-NAVER_CLIENT_ID     = os.getenv("NAVER_CLIENT_ID")
-NAVER_CLIENT_SECRET = os.getenv("NAVER_CLIENT_SECRET")
-MASTER_SHEET_URL    = os.getenv("MASTER_SHEET_URL")
+MASTER_SHEET_URL = os.getenv("MASTER_SHEET_URL")
+
+# 스토어명 → API 키 매핑
+STORE_CREDENTIALS = {
+    "nutone":   (os.getenv("NUTONE_CLIENT_ID"),   os.getenv("NUTONE_CLIENT_SECRET")),
+    "jdhealth": (os.getenv("JDHEALTH_CLIENT_ID"), os.getenv("JDHEALTH_CLIENT_SECRET")),
+    "nutpet":   (os.getenv("NUTPET_CLIENT_ID"),   os.getenv("NUTPET_CLIENT_SECRET")),
+}
 
 CREDENTIALS_PATH = str(BASE_DIR / "credentials" / "google-credentials.json")
 SCOPES = [
@@ -89,21 +94,28 @@ def load_campaigns() -> list:
 
     for row in rows:
         try:
-            title      = str(row.get("제목") or "").strip()
-            start_str  = str(row.get("시작일자") or "").strip()
-            end_str    = str(row.get("종료일자") or "").strip()
-            url        = str(row.get("상품링크") or "").strip()
-            sheet_url  = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
-            api_id     = str(row.get("네이버API_ID") or "").strip() or NAVER_CLIENT_ID
-            api_secret = str(row.get("네이버API_Secret") or "").strip() or NAVER_CLIENT_SECRET
+            title     = str(row.get("제목") or "").strip()
+            start_str = str(row.get("시작일자") or "").strip()
+            end_str   = str(row.get("종료일자") or "").strip()
+            url       = str(row.get("상품링크") or "").strip()
+            sheet_url = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
+            store     = str(row.get("스토어") or "").strip().lower()
 
-            if not all([title, start_str, end_str, url, sheet_url]):
+            if not all([title, start_str, end_str, url, sheet_url, store]):
+                continue
+
+            if store not in STORE_CREDENTIALS:
+                print(f"  [경고] 알 수 없는 스토어명: '{store}' (nutone/jdhealth/nutpet 중 하나여야 합니다)")
+                continue
+
+            api_id, api_secret = STORE_CREDENTIALS[store]
+            if not api_id or not api_secret:
+                print(f"  [경고] '{store}' API 키가 .env에 없습니다.")
                 continue
 
             start_date = parse_date(start_str)
             end_date   = parse_date(end_str)
 
-            # 오늘이 캠페인 기간 내에 있는 행만 처리
             if not (start_date <= today <= end_date):
                 continue
 
@@ -129,8 +141,8 @@ def run_once():
     print(f"  실행 시작: {now_str}")
     print(f"{'='*55}")
 
-    if not NAVER_CLIENT_ID or not NAVER_CLIENT_SECRET:
-        print("[오류] .env 파일에 네이버 API 키를 입력해주세요.")
+    if not MASTER_SHEET_URL:
+        print("[오류] .env 파일에 MASTER_SHEET_URL을 입력해주세요.")
         return
 
     campaigns = load_campaigns()
