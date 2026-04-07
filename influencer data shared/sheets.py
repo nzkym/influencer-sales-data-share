@@ -101,7 +101,9 @@ def write_to_sheet(
     aggregated = _aggregate(sales_data)
     daily_totals = _daily_totals(aggregated)
     total_qty = sum(r["total"] for r in daily_totals)
-    updated_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    from datetime import timezone, timedelta
+    KST = timezone(timedelta(hours=9))
+    updated_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
     # ── 시트 데이터 구성 ──────────────────────────────
     values = []
