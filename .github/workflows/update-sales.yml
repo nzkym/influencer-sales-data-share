@@ -1,0 +1,44 @@
+name: 인플루언서 판매 데이터 업데이트
+
+on:
+  schedule:
+    # 한국 시간 기준 3시간마다 실행 (UTC 기준)
+    # 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 KST
+    - cron: '0 */3 * * *'
+  workflow_dispatch:  # GitHub 웹에서 수동 실행 버튼
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'influencer data shared/requirements.txt'
+
+      - name: 패키지 설치
+        run: pip install -r "influencer data shared/requirements.txt"
+
+      - name: 구글 서비스 계정 키 파일 생성
+        run: |
+          mkdir -p "influencer data shared/credentials"
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > "influencer data shared/credentials/google-credentials.json"
+
+      - name: .env 파일 생성
+        run: |
+          cat > "influencer data shared/.env" << 'EOF'
+          NAVER_CLIENT_ID=${{ secrets.NAVER_CLIENT_ID }}
+          NAVER_CLIENT_SECRET=${{ secrets.NAVER_CLIENT_SECRET }}
+          MASTER_SHEET_URL=${{ secrets.MASTER_SHEET_URL }}
+          EOF
+
+      - name: 판매 데이터 업데이트 실행
+        run: |
+          cd "influencer data shared"
+          python main.py --once

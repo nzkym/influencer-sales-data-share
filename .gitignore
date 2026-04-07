@@ -1,0 +1,14 @@
+# API 키 및 인증 파일 (절대 업로드 금지)
+influencer data shared/.env
+influencer data shared/credentials/
+
+# Python 가상환경 및 캐시
+influencer data shared/.venv/
+**/__pycache__/
+*.pyc
+
+# 임시 파일
+*.tmp.*
+
+# CSV 원본 (선택사항)
+influencer data shared/influencer data form.csv

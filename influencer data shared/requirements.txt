@@ -1,0 +1,6 @@
+requests
+gspread
+google-auth
+python-dotenv
+schedule
+bcrypt
