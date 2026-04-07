@@ -86,8 +86,8 @@ def load_campaigns() -> list:
             title     = str(row.get("제목") or "").strip()
             start_str = str(row.get("시작일자") or "").strip()
             end_str   = str(row.get("종료일자") or "").strip()
-            url       = str(row.get("링크") or "").strip()
-            sheet_url = str(row.get("공유 구글스프레드") or "").strip()
+            url       = str(row.get("상품링크") or "").strip()
+            sheet_url = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
 
             if not all([title, start_str, end_str, url, sheet_url]):
                 continue
