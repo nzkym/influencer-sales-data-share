@@ -72,7 +72,13 @@ def load_campaigns() -> list:
         creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
         client = gspread.authorize(creds)
         sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
-        ws = client.open_by_key(sheet_id).sheet1
+        spreadsheet = client.open_by_key(sheet_id)
+        gid_match = re.search(r"gid=(\d+)", MASTER_SHEET_URL)
+        if gid_match:
+            gid = int(gid_match.group(1))
+            ws = next(s for s in spreadsheet.worksheets() if s.id == gid)
+        else:
+            ws = spreadsheet.sheet1
         rows = ws.get_all_records()
     except Exception as e:
         print(f"[오류] 캠페인 시트 읽기 실패: {e}")
@@ -83,11 +89,13 @@ def load_campaigns() -> list:
 
     for row in rows:
         try:
-            title     = str(row.get("제목") or "").strip()
-            start_str = str(row.get("시작일자") or "").strip()
-            end_str   = str(row.get("종료일자") or "").strip()
-            url       = str(row.get("상품링크") or "").strip()
-            sheet_url = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
+            title      = str(row.get("제목") or "").strip()
+            start_str  = str(row.get("시작일자") or "").strip()
+            end_str    = str(row.get("종료일자") or "").strip()
+            url        = str(row.get("상품링크") or "").strip()
+            sheet_url  = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
+            api_id     = str(row.get("네이버API_ID") or "").strip() or NAVER_CLIENT_ID
+            api_secret = str(row.get("네이버API_Secret") or "").strip() or NAVER_CLIENT_SECRET
 
             if not all([title, start_str, end_str, url, sheet_url]):
                 continue
@@ -105,6 +113,8 @@ def load_campaigns() -> list:
                 "date_from":  start_date.strftime("%Y-%m-%d"),
                 "date_to":    end_date.strftime("%Y-%m-%d"),
                 "sheet_url":  sheet_url,
+                "api_id":     api_id,
+                "api_secret": api_secret,
             })
         except Exception as e:
             print(f"  [경고] 행 파싱 오류: {e}")
@@ -135,8 +145,8 @@ def run_once():
         print(f"[{i}/{len(campaigns)}] {campaign['title'][:45]}")
         try:
             sales = naver_api.get_sales_data(
-                client_id=NAVER_CLIENT_ID,
-                client_secret=NAVER_CLIENT_SECRET,
+                client_id=campaign["api_id"],
+                client_secret=campaign["api_secret"],
                 product_no=campaign["product_no"],
                 date_from=campaign["date_from"],
                 date_to=campaign["date_to"],
@@ -146,7 +156,7 @@ def run_once():
                 product_title=campaign["title"],
                 sales_data=sales,
             )
-            print(f"  ✓ 완료\n")
+            print(f"  완료\n")
         except Exception as e:
             print(f"  [오류] {e}\n")
 
