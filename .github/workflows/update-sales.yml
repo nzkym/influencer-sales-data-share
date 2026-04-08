@@ -31,16 +31,24 @@ jobs:
           echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > "influencer data shared/credentials/google-credentials.json"
 
       - name: .env 파일 생성
+        env:
+          MASTER_SHEET_URL: ${{ secrets.MASTER_SHEET_URL }}
+          NUTONE_CLIENT_ID: ${{ secrets.NUTONE_CLIENT_ID }}
+          NUTONE_CLIENT_SECRET: ${{ secrets.NUTONE_CLIENT_SECRET }}
+          JDHEALTH_CLIENT_ID: ${{ secrets.JDHEALTH_CLIENT_ID }}
+          JDHEALTH_CLIENT_SECRET: ${{ secrets.JDHEALTH_CLIENT_SECRET }}
+          NUTPET_CLIENT_ID: ${{ secrets.NUTPET_CLIENT_ID }}
+          NUTPET_CLIENT_SECRET: ${{ secrets.NUTPET_CLIENT_SECRET }}
         run: |
-          cat > "influencer data shared/.env" << 'EOF'
-          MASTER_SHEET_URL=${{ secrets.MASTER_SHEET_URL }}
-          NUTONE_CLIENT_ID=${{ secrets.NUTONE_CLIENT_ID }}
-          NUTONE_CLIENT_SECRET=${{ secrets.NUTONE_CLIENT_SECRET }}
-          JDHEALTH_CLIENT_ID=${{ secrets.JDHEALTH_CLIENT_ID }}
-          JDHEALTH_CLIENT_SECRET=${{ secrets.JDHEALTH_CLIENT_SECRET }}
-          NUTPET_CLIENT_ID=${{ secrets.NUTPET_CLIENT_ID }}
-          NUTPET_CLIENT_SECRET=${{ secrets.NUTPET_CLIENT_SECRET }}
-          EOF
+          {
+            echo "MASTER_SHEET_URL=$MASTER_SHEET_URL"
+            echo "NUTONE_CLIENT_ID=$NUTONE_CLIENT_ID"
+            echo "NUTONE_CLIENT_SECRET=$NUTONE_CLIENT_SECRET"
+            echo "JDHEALTH_CLIENT_ID=$JDHEALTH_CLIENT_ID"
+            echo "JDHEALTH_CLIENT_SECRET=$JDHEALTH_CLIENT_SECRET"
+            echo "NUTPET_CLIENT_ID=$NUTPET_CLIENT_ID"
+            echo "NUTPET_CLIENT_SECRET=$NUTPET_CLIENT_SECRET"
+          } > "influencer data shared/.env"
 
       - name: 판매 데이터 업데이트 실행
         run: |
