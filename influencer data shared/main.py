@@ -14,6 +14,7 @@ import os
 import sys
 import time
 import schedule
+import requests as _requests
 from datetime import datetime, date
 from dotenv import load_dotenv
 from pathlib import Path
@@ -37,11 +38,28 @@ STORE_CREDENTIALS = {
     "nutpet":   (os.getenv("NUTPET_CLIENT_ID"),   os.getenv("NUTPET_CLIENT_SECRET")),
 }
 
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
+
 CREDENTIALS_PATH = str(BASE_DIR / "credentials" / "google-credentials.json")
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
+
+
+# ── 텔레그램 알림 ────────────────────────────────────────
+def send_telegram(message: str):
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        return
+    try:
+        _requests.post(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data={"chat_id": TELEGRAM_CHAT_ID, "text": message},
+            timeout=10,
+        )
+    except Exception:
+        pass
 
 
 # ── 날짜 파싱 ────────────────────────────────────────────
@@ -171,6 +189,7 @@ def run_once():
             print(f"  완료\n")
         except Exception as e:
             print(f"  [오류] {e}\n")
+            send_telegram(f"[인플루언서 프로그램 오류]\n캠페인: {campaign['title'][:30]}\n오류: {e}")
 
     print(f"{'='*55}\n")
 
