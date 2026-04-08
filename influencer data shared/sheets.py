@@ -54,33 +54,46 @@ def _fmt_date(date_str: str) -> str:
         return date_str
 
 
+def _extract_box_count(option: str) -> int:
+    """옵션명에서 박스 수량 추출. 예: '선택: 12BOX(50%)' → 12"""
+    match = re.search(r'(\d+)\s*BOX', option, re.IGNORECASE)
+    if match:
+        return int(match.group(1))
+    return 1  # BOX 수량 없으면 1개로 간주
+
+
 def _aggregate(sales_data: list) -> list:
-    """날짜×옵션별 집계 + 누적 계산"""
+    """날짜×옵션별 집계 (주문수 + 제품수)"""
     agg = defaultdict(lambda: defaultdict(int))
     for row in sales_data:
         agg[row["date"]][row["option"]] += row["quantity"]
 
-    cumulative = defaultdict(int)
     rows = []
     for date in sorted(agg.keys()):
         for option in sorted(agg[date].keys()):
-            daily = agg[date][option]
-            cumulative[option] += daily
+            daily_orders = agg[date][option]
+            box_count = _extract_box_count(option)
+            daily_products = daily_orders * box_count
             rows.append({
                 "date": date,
                 "option": option,
-                "daily": daily,
-                "cumulative": cumulative[option],
+                "daily_orders": daily_orders,
+                "daily_products": daily_products,
             })
     return rows
 
 
 def _daily_totals(aggregated: list) -> list:
-    """날짜별 전체 합계 (그래프용)"""
-    totals = defaultdict(int)
+    """날짜별 주문수/제품수 합계 (그래프용)"""
+    order_totals = defaultdict(int)
+    product_totals = defaultdict(int)
     for r in aggregated:
-        totals[r["date"]] += r["daily"]
-    return [{"date": d, "total": totals[d]} for d in sorted(totals.keys())]
+        order_totals[r["date"]] += r["daily_orders"]
+        product_totals[r["date"]] += r["daily_products"]
+    return [
+        {"date": d, "orders": order_totals[d], "products": product_totals[d]}
+        for d in sorted(order_totals.keys())
+    ]
 
 
 def write_to_sheet(
@@ -100,7 +113,8 @@ def write_to_sheet(
 
     aggregated = _aggregate(sales_data)
     daily_totals = _daily_totals(aggregated)
-    total_qty = sum(r["total"] for r in daily_totals)
+    total_orders = sum(r["orders"] for r in daily_totals)
+    total_products = sum(r["products"] for r in daily_totals)
     from datetime import timezone, timedelta
     KST = timezone(timedelta(hours=9))
     updated_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
@@ -113,37 +127,36 @@ def write_to_sheet(
     # 행2: 업데이트 시각
     values.append([f"마지막 업데이트: {updated_at}", "", "", ""])
     # 행3: 전체 누적
-    values.append([f"전체 누적 판매량: {total_qty:,}개", "", "", ""])
+    values.append([f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개", "", "", ""])
     # 행4: 주의사항
     values.append([DISCLAIMER, "", "", ""])
     # 행5: 빈 줄
     values.append(["", "", "", ""])
     # 행6: 헤더
-    values.append(["날짜", "옵션", "일별 판매수", "누적 판매수"])
+    values.append(["날짜", "옵션", "주문수", "제품수"])
 
     DATA_START_ROW = 5  # 0-indexed: 행6(헤더)이 index 5
 
     # 행7~: 데이터
     if aggregated:
         for row in aggregated:
-            display = f"{_fmt_date(row['date'])}  {row['option']}  {row['daily']}개"
             values.append([
                 _fmt_date(row["date"]),
                 row["option"],
-                row["daily"],
-                row["cumulative"],
+                row["daily_orders"],
+                row["daily_products"],
             ])
     else:
         values.append(["", "아직 판매 데이터가 없습니다", "", ""])
 
     data_end_row = len(values)  # 0-indexed exclusive
 
-    # 행 뒤에 그래프용 보조 데이터 (날짜별 합계)
+    # 행 뒤에 그래프용 보조 데이터 (날짜별 주문수 + 제품수)
     values.append(["", "", "", ""])
     CHART_DATA_START = len(values)
-    values.append(["날짜 (그래프용)", "일별 합계"])
+    values.append(["날짜 (그래프용)", "주문수", "제품수"])
     for d in daily_totals:
-        values.append([_fmt_date(d["date"]), d["total"]])
+        values.append([_fmt_date(d["date"]), d["orders"], d["products"]])
     CHART_DATA_END = len(values)
 
     # ── 시트 기록 ──────────────────────────────────────
@@ -214,7 +227,7 @@ def write_to_sheet(
             "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
         }})
 
-    # 일별/누적 판매수 컬럼(C, D)만 가운데 정렬
+    # 주문수/제품수 컬럼(C, D)만 가운데 정렬
     R.append({"repeatCell": {
         "range": cell_range(DATA_START_ROW + 1, 2, data_end_row, 4),
         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
@@ -236,12 +249,12 @@ def write_to_sheet(
                 R.append({"deleteEmbeddedObject": {"objectId": chart["chartId"]}})
 
     if daily_totals and CHART_DATA_END > CHART_DATA_START + 1:
-        chart_start = CHART_DATA_START      # 헤더 행
-        chart_end = CHART_DATA_END          # 데이터 마지막+1
+        chart_start = CHART_DATA_START
+        chart_end = CHART_DATA_END
 
         R.append({"addChart": {"chart": {
             "spec": {
-                "title": "날짜별 주문수",
+                "title": "날짜별 주문수 / 제품수",
                 "titleTextFormat": {"bold": True, "fontSize": 12},
                 "basicChart": {
                     "chartType": "COLUMN",
@@ -251,7 +264,7 @@ def write_to_sheet(
                          "title": "날짜",
                          "titleTextPosition": {"horizontalAlignment": "CENTER"}},
                         {"position": "LEFT_AXIS",
-                         "title": "주문수",
+                         "title": "수량",
                          "titleTextPosition": {"horizontalAlignment": "CENTER"}},
                     ],
                     "domains": [{
@@ -263,17 +276,30 @@ def write_to_sheet(
                             "endColumnIndex": 1,
                         }]}}
                     }],
-                    "series": [{
-                        "series": {"sourceRange": {"sources": [{
-                            "sheetId": ws.id,
-                            "startRowIndex": chart_start,
-                            "endRowIndex": chart_end,
-                            "startColumnIndex": 1,
-                            "endColumnIndex": 2,
-                        }]}},
-                        "targetAxis": "LEFT_AXIS",
-                        "color": {"red": 0.20, "green": 0.44, "blue": 0.78},
-                    }],
+                    "series": [
+                        {
+                            "series": {"sourceRange": {"sources": [{
+                                "sheetId": ws.id,
+                                "startRowIndex": chart_start,
+                                "endRowIndex": chart_end,
+                                "startColumnIndex": 1,
+                                "endColumnIndex": 2,
+                            }]}},
+                            "targetAxis": "LEFT_AXIS",
+                            "color": {"red": 0.20, "green": 0.44, "blue": 0.78},
+                        },
+                        {
+                            "series": {"sourceRange": {"sources": [{
+                                "sheetId": ws.id,
+                                "startRowIndex": chart_start,
+                                "endRowIndex": chart_end,
+                                "startColumnIndex": 2,
+                                "endColumnIndex": 3,
+                            }]}},
+                            "targetAxis": "LEFT_AXIS",
+                            "color": {"red": 0.91, "green": 0.49, "blue": 0.14},
+                        },
+                    ],
                     "headerCount": 1,
                 },
             },
