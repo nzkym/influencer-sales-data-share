@@ -155,13 +155,18 @@ def write_to_sheet(
 
     DATA_START_ROW = 5  # 0-indexed
 
+    # 순위 표시 여부: 옵션이 2개 이상일 때만
+    show_rank = len(ranked) >= 2
+
     # 행7~: 데이터 + 순위 병렬 표시
     if aggregated:
         for i, row in enumerate(aggregated):
-            rank_option = ranked[i][0] if i < len(ranked) else ""
-            rank_orders = ranked[i][1] if i < len(ranked) else ""
-            rank_prefix = ["🥇", "🥈", "🥉"][i] if i < 3 and rank_option else ("" if not rank_option else f"{i+1}위")
-            rank_label = f"{rank_prefix} {rank_option}" if rank_option else ""
+            if show_rank and i < len(ranked):
+                rank_label = f"{i+1}위  {ranked[i][0]}"
+                rank_orders = ranked[i][1]
+            else:
+                rank_label = ""
+                rank_orders = ""
             values.append([
                 _fmt_date(row["date"]),
                 row["option"],
@@ -169,7 +174,7 @@ def write_to_sheet(
                 row["daily_products"],
                 "",
                 rank_label,
-                rank_orders if rank_option else "",
+                rank_orders if rank_label else "",
             ])
     else:
         values.append(["", "아직 판매 데이터가 없습니다", "", "", "", "", ""])
@@ -375,7 +380,7 @@ def write_to_sheet(
                 "overlayPosition": {
                     "anchorCell": {
                         "sheetId": ws.id,
-                        "rowIndex": data_end_row + 2,
+                        "rowIndex": CHART_DATA_END + 2,
                         "columnIndex": 0,
                     },
                     "widthPixels": 520,
