@@ -34,6 +34,9 @@ def _get_access_token(client_id: str, client_secret: str) -> str:
         },
         timeout=30,
     )
+    if not resp.ok:
+        print(f"  [인증 오류] status={resp.status_code}, body={resp.text[:300]}")
+        print(f"  [인증 오류] client_id 길이={len(client_id)}, secret 길이={len(client_secret)}")
     resp.raise_for_status()
     return resp.json()["access_token"]
 
