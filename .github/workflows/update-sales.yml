@@ -1,11 +1,7 @@
 name: 인플루언서 판매 데이터 업데이트
 
 on:
-  schedule:
-    # 한국 시간 기준 3시간마다 실행 (UTC 기준)
-    # 00:00, 03:00, 06:00, 09:00, 12:00, 15:00, 18:00, 21:00 KST
-    - cron: '0 */3 * * *'
-  workflow_dispatch:  # GitHub 웹에서 수동 실행 버튼
+  workflow_dispatch:  # GitHub 웹에서 수동 실행 버튼만 (Google Cloud에서 자동 실행)
 
 jobs:
   update:
