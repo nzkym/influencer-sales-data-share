@@ -33,9 +33,13 @@ jobs:
       - name: .env 파일 생성
         run: |
           cat > "influencer data shared/.env" << 'EOF'
-          NAVER_CLIENT_ID=${{ secrets.NAVER_CLIENT_ID }}
-          NAVER_CLIENT_SECRET=${{ secrets.NAVER_CLIENT_SECRET }}
           MASTER_SHEET_URL=${{ secrets.MASTER_SHEET_URL }}
+          NUTONE_CLIENT_ID=${{ secrets.NUTONE_CLIENT_ID }}
+          NUTONE_CLIENT_SECRET=${{ secrets.NUTONE_CLIENT_SECRET }}
+          JDHEALTH_CLIENT_ID=${{ secrets.JDHEALTH_CLIENT_ID }}
+          JDHEALTH_CLIENT_SECRET=${{ secrets.JDHEALTH_CLIENT_SECRET }}
+          NUTPET_CLIENT_ID=${{ secrets.NUTPET_CLIENT_ID }}
+          NUTPET_CLIENT_SECRET=${{ secrets.NUTPET_CLIENT_SECRET }}
           EOF
 
       - name: 판매 데이터 업데이트 실행
