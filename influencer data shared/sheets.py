@@ -241,7 +241,7 @@ def write_to_sheet(
 
         R.append({"addChart": {"chart": {
             "spec": {
-                "title": "날짜별 판매량",
+                "title": "날짜별 주문수",
                 "titleTextFormat": {"bold": True, "fontSize": 12},
                 "basicChart": {
                     "chartType": "COLUMN",
@@ -251,7 +251,7 @@ def write_to_sheet(
                          "title": "날짜",
                          "titleTextPosition": {"horizontalAlignment": "CENTER"}},
                         {"position": "LEFT_AXIS",
-                         "title": "판매수량(개)",
+                         "title": "주문수",
                          "titleTextPosition": {"horizontalAlignment": "CENTER"}},
                     ],
                     "domains": [{
