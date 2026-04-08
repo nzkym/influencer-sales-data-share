@@ -234,11 +234,18 @@ def write_to_sheet(
         "fields": "userEnteredFormat(horizontalAlignment)",
     }})
 
-    # 열 너비 자동 조정
+    # 열 너비 설정 (A:자동, B:자동, C:고정80px, D:고정80px)
     R.append({"autoResizeDimensions": {"dimensions": {
         "sheetId": ws.id, "dimension": "COLUMNS",
-        "startIndex": 0, "endIndex": 4,
+        "startIndex": 0, "endIndex": 2,
     }}})
+    for col_idx, width in [(2, 80), (3, 80)]:
+        R.append({"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS",
+                      "startIndex": col_idx, "endIndex": col_idx + 1},
+            "properties": {"pixelSize": width},
+            "fields": "pixelSize",
+        }})
 
     # ── 차트 추가 ──────────────────────────────────────
     # 기존 차트 삭제
