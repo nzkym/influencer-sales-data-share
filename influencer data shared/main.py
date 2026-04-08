@@ -185,6 +185,7 @@ def run_once():
                 spreadsheet_url=campaign["sheet_url"],
                 product_title=campaign["title"],
                 sales_data=sales,
+                date_from=campaign["date_from"],
             )
             print(f"  완료\n")
         except Exception as e:

@@ -100,7 +100,11 @@ def write_to_sheet(
     spreadsheet_url: str,
     product_title: str,
     sales_data: list,
+    date_from: str = "",   # "2026-04-06" 형식 (D+일 계산용)
 ):
+    from datetime import timezone, timedelta, date as date_type
+    KST = timezone(timedelta(hours=9))
+
     client = _get_client()
     sheet_id = _extract_sheet_id(spreadsheet_url)
     spreadsheet = client.open_by_key(sheet_id)
@@ -115,44 +119,65 @@ def write_to_sheet(
     daily_totals = _daily_totals(aggregated)
     total_orders = sum(r["orders"] for r in daily_totals)
     total_products = sum(r["products"] for r in daily_totals)
-    from datetime import timezone, timedelta
-    KST = timezone(timedelta(hours=9))
     updated_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+
+    # D+일 계산
+    try:
+        start = datetime.strptime(date_from, "%Y-%m-%d").date()
+        today = datetime.now(KST).date()
+        d_day = (today - start).days + 1
+        d_day_str = f"D+{d_day}일째"
+    except Exception:
+        d_day_str = ""
+
+    # 옵션별 총 주문수 순위
+    option_totals = defaultdict(int)
+    for r in aggregated:
+        option_totals[r["option"]] += r["daily_orders"]
+    ranked = sorted(option_totals.items(), key=lambda x: x[1], reverse=True)
 
     # ── 시트 데이터 구성 ──────────────────────────────
     values = []
 
-    # 행1: 제목
-    values.append([f"📊 {product_title}", "", "", ""])
+    # 행1: 제목 + D+일
+    title_row = [f"📊 {product_title}", "", "", "", "", d_day_str]
+    values.append(title_row)
     # 행2: 업데이트 시각
-    values.append([f"마지막 업데이트: {updated_at}", "", "", ""])
-    # 행3: 전체 누적
-    values.append([f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개", "", "", ""])
+    values.append([f"마지막 업데이트: {updated_at}", "", "", "", "", ""])
+    # 행3: 총계
+    values.append([f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개", "", "", "", "", ""])
     # 행4: 주의사항
-    values.append([DISCLAIMER, "", "", ""])
+    values.append([DISCLAIMER, "", "", "", "", ""])
     # 행5: 빈 줄
-    values.append(["", "", "", ""])
+    values.append(["", "", "", "", "", ""])
     # 행6: 헤더
-    values.append(["날짜", "옵션", "주문수", "제품수"])
+    values.append(["날짜", "옵션", "주문수", "제품수", "", "🏆 옵션별 순위", "총 주문수"])
 
-    DATA_START_ROW = 5  # 0-indexed: 행6(헤더)이 index 5
+    DATA_START_ROW = 5  # 0-indexed
 
-    # 행7~: 데이터
+    # 행7~: 데이터 + 순위 병렬 표시
     if aggregated:
-        for row in aggregated:
+        for i, row in enumerate(aggregated):
+            rank_option = ranked[i][0] if i < len(ranked) else ""
+            rank_orders = ranked[i][1] if i < len(ranked) else ""
+            rank_prefix = ["🥇", "🥈", "🥉"][i] if i < 3 and rank_option else ("" if not rank_option else f"{i+1}위")
+            rank_label = f"{rank_prefix} {rank_option}" if rank_option else ""
             values.append([
                 _fmt_date(row["date"]),
                 row["option"],
                 row["daily_orders"],
                 row["daily_products"],
+                "",
+                rank_label,
+                rank_orders if rank_option else "",
             ])
     else:
-        values.append(["", "아직 판매 데이터가 없습니다", "", ""])
+        values.append(["", "아직 판매 데이터가 없습니다", "", "", "", "", ""])
 
-    data_end_row = len(values)  # 0-indexed exclusive
+    data_end_row = len(values)
 
-    # 행 뒤에 그래프용 보조 데이터 (날짜별 주문수 + 제품수)
-    values.append(["", "", "", ""])
+    # 그래프용 보조 데이터
+    values.append(["", "", "", "", "", "", ""])
     CHART_DATA_START = len(values)
     values.append(["날짜 (그래프용)", "주문수", "제품수"])
     for d in daily_totals:
@@ -171,19 +196,28 @@ def write_to_sheet(
         return {"sheetId": ws.id, "startRowIndex": r1, "endRowIndex": r2,
                 "startColumnIndex": c1, "endColumnIndex": c2}
 
-    # 제목 행 (행1)
+    BLACK = {"red": 0.0, "green": 0.0, "blue": 0.0}
+    COLOR_RANK_BG = {"red": 1.0, "green": 0.97, "blue": 0.88}  # 순위 열 배경 (연한 노랑)
+
+    # 제목 행 (행1) - A~D + F(D+일)
     R.append({"repeatCell": {
-        "range": cell_range(0, 0, 1, 4),
+        "range": cell_range(0, 0, 1, 7),
         "cell": {"userEnteredFormat": {
             "backgroundColor": COLOR_TITLE_BG,
             "textFormat": {"bold": True, "fontSize": 13, "foregroundColor": COLOR_TITLE_FG},
         }},
         "fields": "userEnteredFormat(backgroundColor,textFormat)",
     }})
+    # D+일 오른쪽 정렬
+    R.append({"repeatCell": {
+        "range": cell_range(0, 5, 1, 7),
+        "cell": {"userEnteredFormat": {"horizontalAlignment": "RIGHT"}},
+        "fields": "userEnteredFormat(horizontalAlignment)",
+    }})
 
     # 업데이트/누적 행 (행2~3)
     R.append({"repeatCell": {
-        "range": cell_range(1, 0, 3, 4),
+        "range": cell_range(1, 0, 3, 7),
         "cell": {"userEnteredFormat": {
             "textFormat": {"bold": False, "fontSize": 10},
         }},
@@ -192,7 +226,7 @@ def write_to_sheet(
 
     # 주의사항 행 (행4)
     R.append({"repeatCell": {
-        "range": cell_range(3, 0, 4, 4),
+        "range": cell_range(3, 0, 4, 7),
         "cell": {"userEnteredFormat": {
             "backgroundColor": COLOR_WARN_BG,
             "textFormat": {"italic": True, "fontSize": 9,
@@ -201,7 +235,7 @@ def write_to_sheet(
         "fields": "userEnteredFormat(backgroundColor,textFormat)",
     }})
 
-    # 헤더 행 (행6)
+    # 헤더 행 (행6) - A~D
     R.append({"repeatCell": {
         "range": cell_range(DATA_START_ROW, 0, DATA_START_ROW + 1, 4),
         "cell": {"userEnteredFormat": {
@@ -212,8 +246,19 @@ def write_to_sheet(
         "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
     }})
 
-    # 데이터 행: 배경색 + 검은 텍스트 + 왼쪽 정렬 (일괄 적용)
-    BLACK = {"red": 0.0, "green": 0.0, "blue": 0.0}
+    # 순위 헤더 (행6 F~G)
+    COLOR_RANK_HEADER = {"red": 0.95, "green": 0.76, "blue": 0.20}
+    R.append({"repeatCell": {
+        "range": cell_range(DATA_START_ROW, 5, DATA_START_ROW + 1, 7),
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": COLOR_RANK_HEADER,
+            "textFormat": {"bold": True, "foregroundColor": BLACK},
+            "horizontalAlignment": "CENTER",
+        }},
+        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+    }})
+
+    # 데이터 행 (A~D)
     for i, _ in enumerate(aggregated or [""]):
         row_idx = DATA_START_ROW + 1 + i
         bg = COLOR_ODD_BG if i % 2 == 0 else COLOR_EVEN_BG
@@ -226,20 +271,36 @@ def write_to_sheet(
             }},
             "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
         }})
+        # 순위 열 (F~G)
+        R.append({"repeatCell": {
+            "range": cell_range(row_idx, 5, row_idx + 1, 7),
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": COLOR_RANK_BG,
+                "textFormat": {"bold": i < 3, "foregroundColor": BLACK},
+                "horizontalAlignment": "LEFT",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+        }})
 
-    # 주문수/제품수 컬럼(C, D)만 가운데 정렬
+    # C, D열 가운데 정렬
     R.append({"repeatCell": {
         "range": cell_range(DATA_START_ROW + 1, 2, data_end_row, 4),
         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
         "fields": "userEnteredFormat(horizontalAlignment)",
     }})
+    # G열(순위 주문수) 가운데 정렬
+    R.append({"repeatCell": {
+        "range": cell_range(DATA_START_ROW + 1, 6, data_end_row, 7),
+        "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
+        "fields": "userEnteredFormat(horizontalAlignment)",
+    }})
 
-    # 열 너비 설정 (A:자동, B:자동, C:고정80px, D:고정80px)
+    # 열 너비 설정
     R.append({"autoResizeDimensions": {"dimensions": {
         "sheetId": ws.id, "dimension": "COLUMNS",
         "startIndex": 0, "endIndex": 2,
     }}})
-    for col_idx, width in [(2, 80), (3, 80)]:
+    for col_idx, width in [(2, 80), (3, 80), (4, 20), (5, 220), (6, 80)]:
         R.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS",
                       "startIndex": col_idx, "endIndex": col_idx + 1},
@@ -314,11 +375,11 @@ def write_to_sheet(
                 "overlayPosition": {
                     "anchorCell": {
                         "sheetId": ws.id,
-                        "rowIndex": DATA_START_ROW,
-                        "columnIndex": 5,
+                        "rowIndex": data_end_row + 2,
+                        "columnIndex": 0,
                     },
-                    "widthPixels": 480,
-                    "heightPixels": 300,
+                    "widthPixels": 520,
+                    "heightPixels": 320,
                 }
             },
         }}})
