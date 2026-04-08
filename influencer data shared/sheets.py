@@ -155,14 +155,18 @@ def write_to_sheet(
 
     DATA_START_ROW = 5  # 0-indexed
 
-    # 순위 표시 여부: 옵션이 2개 이상이고, 주문수가 모두 같지 않을 때만
-    show_rank = len(ranked) >= 2 and len(set(v for _, v in ranked)) > 1
+    # 주문수가 모두 같은지 여부
+    all_equal = len(set(v for _, v in ranked)) == 1
 
     # 행7~: 데이터 + 순위 병렬 표시
     if aggregated:
         for i, row in enumerate(aggregated):
-            if show_rank and i < len(ranked):
-                rank_label = f"{i+1}위  {ranked[i][0]}"
+            if len(ranked) >= 2 and i < len(ranked):
+                if all_equal:
+                    # 주문수 모두 같으면 순위 번호 없이 옵션명만
+                    rank_label = ranked[i][0]
+                else:
+                    rank_label = f"{i+1}위  {ranked[i][0]}"
                 rank_orders = ranked[i][1]
             else:
                 rank_label = ""
