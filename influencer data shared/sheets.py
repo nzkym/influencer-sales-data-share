@@ -155,8 +155,8 @@ def write_to_sheet(
 
     DATA_START_ROW = 5  # 0-indexed
 
-    # 순위 표시 여부: 옵션이 2개 이상일 때만
-    show_rank = len(ranked) >= 2
+    # 순위 표시 여부: 옵션이 2개 이상이고, 주문수가 모두 같지 않을 때만
+    show_rank = len(ranked) >= 2 and len(set(v for _, v in ranked)) > 1
 
     # 행7~: 데이터 + 순위 병렬 표시
     if aggregated:
