@@ -189,7 +189,32 @@ def run_once():
             print(f"  완료\n")
         except Exception as e:
             print(f"  [오류] {e}\n")
-            send_telegram(f"[인플루언서 프로그램 오류]\n캠페인: {campaign['title'][:30]}\n오류: {e}")
+            err_str = str(e)
+            if "403" in err_str or "Forbidden" in err_str:
+                cause = "네이버 API 인증 오류 (IP 차단 또는 API 키 만료)"
+                action = "→ 네이버 커머스 API에서 IP 및 API 키를 확인해주세요"
+            elif "401" in err_str or "Unauthorized" in err_str:
+                cause = "네이버 API 키 오류 (ID 또는 Secret 불일치)"
+                action = "→ .env 파일의 API 키를 확인해주세요"
+            elif "spreadsheet" in err_str.lower() or "gspread" in err_str.lower():
+                cause = "구글 시트 접근 오류 (권한 또는 URL 문제)"
+                action = "→ 인플루언서 구글 시트가 서비스 계정과 공유되어 있는지 확인해주세요"
+            elif "products" in err_str or "상품번호" in err_str:
+                cause = "상품 URL에서 상품번호를 찾을 수 없음"
+                action = "→ 캠페인 시트의 상품링크 URL을 확인해주세요"
+            else:
+                cause = f"알 수 없는 오류: {err_str[:100]}"
+                action = "→ 개발자에게 문의해주세요"
+
+            send_telegram(
+                f"⚠️ [인플루언서 프로그램 오류]\n\n"
+                f"📦 상품명: {campaign['title'][:40]}\n"
+                f"🔗 상품링크: {campaign.get('sheet_url', '')[:60]}\n"
+                f"🏪 스토어: {campaign.get('api_id', '')[:20]}\n\n"
+                f"❌ 원인: {cause}\n"
+                f"{action}\n\n"
+                f"🕐 발생시각: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
 
     print(f"{'='*55}\n")
 
