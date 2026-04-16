@@ -210,8 +210,8 @@ def run_once():
             send_telegram(
                 f"⚠️ [인플루언서 프로그램 오류]\n\n"
                 f"📦 상품명: {campaign['title'][:40]}\n"
-                f"🔗 상품링크: {campaign.get('sheet_url', '')[:60]}\n"
-                f"🏪 스토어: {campaign.get('api_id', '')[:20]}\n\n"
+                f"🔗 인플루언서 시트: {campaign.get('sheet_url', '')}\n"
+                f"🏪 스토어: {next((k for k, v in STORE_CREDENTIALS.items() if v[0] == campaign.get('api_id')), campaign.get('api_id', ''))}\n\n"
                 f"❌ 원인: {cause}\n"
                 f"{action}\n\n"
                 f"🕐 발생시각: {datetime.now().strftime('%Y-%m-%d %H:%M')}"

@@ -1,11 +1,16 @@
 # API 키 및 인증 파일 (절대 업로드 금지)
 influencer data shared/.env
 influencer data shared/credentials/
+patent name find/.env
 
 # Python 가상환경 및 캐시
 influencer data shared/.venv/
+patent name find/.venv/
 **/__pycache__/
 *.pyc
+
+# 보고서 (로컬 생성물)
+patent name find/reports/
 
 # 임시 파일
 *.tmp.*
