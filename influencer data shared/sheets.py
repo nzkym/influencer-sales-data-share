@@ -109,11 +109,7 @@ def write_to_sheet(
     sheet_id = _extract_sheet_id(spreadsheet_url)
     spreadsheet = client.open_by_key(sheet_id)
 
-    sheet_name = "판매현황"
-    try:
-        ws = spreadsheet.worksheet(sheet_name)
-    except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title=sheet_name, rows=300, cols=15)
+    ws = spreadsheet.sheet1
 
     aggregated = _aggregate(sales_data)
     daily_totals = _daily_totals(aggregated)

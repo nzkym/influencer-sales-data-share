@@ -10,12 +10,12 @@
 
 | 역할 | 위치 |
 |------|------|
-| 실제 실행 서버 | Google Cloud VM (IP: 35.222.61.113, us-central1-a) |
+| 실제 실행 서버 | Google Cloud VM (IP: 136.111.217.238, us-central1-f, instance-jsh-20260417) |
 | 코드 보관 | GitHub (github.com/nzkym/influencer-sales-data-share) |
 | 코드 수정 | 이 PC에서 Claude와 대화 후 git push |
 
 ### Google Cloud 접속
-Google Cloud Console → Compute Engine → VM 인스턴스 → influencer-server → SSH 버튼
+Google Cloud Console → Compute Engine → VM 인스턴스 → instance-jsh-20260417 → SSH 버튼
 
 ### 코드 수정 후 서버 반영
 crontab에 `git pull`이 포함되어 있어 매 정각 자동 반영됨.
