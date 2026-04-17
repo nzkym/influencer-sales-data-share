@@ -109,7 +109,18 @@ def write_to_sheet(
     sheet_id = _extract_sheet_id(spreadsheet_url)
     spreadsheet = client.open_by_key(sheet_id)
 
+    # 기존 "판매현황" 탭이 첫 번째 시트가 아니면 삭제
+    try:
+        old_ws = spreadsheet.worksheet("판매현황")
+        if old_ws.id != spreadsheet.sheet1.id:
+            spreadsheet.del_worksheet(old_ws)
+    except gspread.WorksheetNotFound:
+        pass
+
+    # 첫 번째 시트 사용 + 이름을 "판매현황"으로 변경
     ws = spreadsheet.sheet1
+    if ws.title != "판매현황":
+        ws.update_title("판매현황")
 
     aggregated = _aggregate(sales_data)
     daily_totals = _daily_totals(aggregated)
