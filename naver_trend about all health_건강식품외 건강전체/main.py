@@ -333,6 +333,48 @@ def send_telegram_report(analyzed: list[dict], pdf_path, txt_path, is_critical: 
         print("[텔레그램] PDF 파일 없음 — 메시지만 발송됨")
 
 
+def send_email_report(pdf_path, txt_path) -> None:
+    """이메일로 PDF 리포트 발송 (.env에 EMAIL_* 설정 시에만 동작)."""
+    import smtplib
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from email.mime.base import MIMEBase
+    from email import encoders
+
+    user = os.getenv("EMAIL_USER", "").strip()
+    password = os.getenv("EMAIL_PASSWORD", "").strip()
+    to = os.getenv("EMAIL_TO", "").strip()
+
+    if not user or not password or not to:
+        print("[이메일] EMAIL_USER/EMAIL_PASSWORD/EMAIL_TO가 .env에 없습니다. 건너뜁니다.")
+        return
+
+    today = datetime.now().strftime("%Y년 %m월 %d일")
+    pdf = Path(pdf_path) if pdf_path else None
+
+    msg = MIMEMultipart()
+    msg["From"] = user
+    msg["To"] = to
+    msg["Subject"] = f"[건강관련 전체 트렌드] {today} 리포트"
+    msg.attach(MIMEText("PDF 리포트를 첨부합니다.", "plain", "utf-8"))
+
+    if pdf and pdf.exists():
+        with open(pdf, "rb") as f:
+            part = MIMEBase("application", "octet-stream")
+            part.set_payload(f.read())
+        encoders.encode_base64(part)
+        part.add_header("Content-Disposition", f"attachment; filename={pdf.name}")
+        msg.attach(part)
+
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as server:
+            server.login(user, password)
+            server.sendmail(user, to, msg.as_string())
+        print(f"[이메일] 발송 완료 → {to}")
+    except Exception as e:
+        print(f"[이메일] 발송 실패: {e}")
+
+
 async def step1_scrape_keywords(args) -> tuple:
     """Step 1: Scrape keywords from Naver Shopping Insight."""
     print("\n" + "-" * 50)
@@ -830,6 +872,12 @@ async def _run_reuse_json_mode(args, output_path: Path, output_dir: Path) -> Non
     print("[7단계] 텔레그램 알림 발송")
     print("-" * 50)
     send_telegram_report(analyzed, pdf_path, output_path, is_critical=is_critical_missing)
+
+    # === 이메일 발송 (EMAIL_* 설정 시) ===
+    print("\n" + "-" * 50)
+    print("[8단계] 이메일 발송")
+    print("-" * 50)
+    send_email_report(pdf_path, output_path)
 
     elapsed = time.time() - total_start
     print(f"\n[완료] 소요 시간: {elapsed:.1f}초")
