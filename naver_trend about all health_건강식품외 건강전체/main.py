@@ -251,7 +251,7 @@ def check_env_vars(skip_ai: bool = False) -> bool:
     return True
 
 
-def send_telegram_report(analyzed: list[dict], pdf_path, txt_path, is_critical: bool = False) -> None:
+def send_telegram_report(analyzed: list[dict], pdf_path, txt_path, is_critical: bool = False, category_notes: dict = None) -> None:
     """텔레그램으로 분석 완료 알림 및 PDF 파일 전송."""
     import requests as _requests
 
@@ -294,12 +294,18 @@ def send_telegram_report(analyzed: list[dict], pdf_path, txt_path, is_critical: 
     growing = sum(1 for k in analyzed if k.get("trend_phase") == "growing")
     top3 = [k["keyword"] for k in analyzed[:3]]
 
+    category_warning = ""
+    if category_notes:
+        lines = [f"  • {name}: {note}" for name, note in list(category_notes.items())[:5]]
+        category_warning = f"\n\n⚠️ 카테고리 수집 이슈 ({len(category_notes)}건):\n" + "\n".join(lines)
+
     message = (
         f"✅ [건강관련 전체 트렌드 분석 완료 — 식품·생활건강·출산육아·화장품·가전]\n\n"
         f"📅 {today}\n"
         f"🔍 분석 키워드: {total}개\n"
         f"🚀 얼리라이징: {early}개  |  성장중: {growing}개\n"
-        f"🏆 기회점수 TOP 3: {', '.join(top3)}\n\n"
+        f"🏆 기회점수 TOP 3: {', '.join(top3)}"
+        f"{category_warning}\n\n"
         f"📄 PDF 리포트를 첨부합니다."
     )
 
@@ -873,12 +879,6 @@ async def _run_reuse_json_mode(args, output_path: Path, output_dir: Path) -> Non
     print("-" * 50)
     send_telegram_report(analyzed, pdf_path, output_path, is_critical=is_critical_missing)
 
-    # === 이메일 발송 (EMAIL_* 설정 시) ===
-    print("\n" + "-" * 50)
-    print("[8단계] 이메일 발송")
-    print("-" * 50)
-    send_email_report(pdf_path, output_path)
-
     elapsed = time.time() - total_start
     print(f"\n[완료] 소요 시간: {elapsed:.1f}초")
     print(f"[완료] 결과 폴더: {output_dir}")
@@ -1104,12 +1104,19 @@ async def main():
 
     tv_data = load_latest_tv_data()
 
+    category_notes = scrape_results.get("category_notes", {}) if scrape_results else {}
+
     if is_critical_missing:
         print(f"\n[6단계] ⚠️  중요 데이터 누락 감지 ({len(missing_kws)}개 키워드)")
         print("  → 불완전한 리포트 대신 누락 경고 요약본을 생성합니다.")
         full_report = format_missing_data_warning(analyzed, trend_data)
     else:
-        full_report = format_report(briefing, analyzed, scrape_results if scrape_results else None, trend_data, tv_data)
+        full_report = format_report(
+            briefing, analyzed,
+            scrape_results if scrape_results else None,
+            trend_data, tv_data,
+            category_notes=category_notes,
+        )
 
     step6_save_report(full_report, analyzed, trend_data, output_path, chart_files)
 
@@ -1145,7 +1152,7 @@ async def main():
     print("\n" + "-" * 50)
     print("[8단계] 텔레그램 알림 발송")
     print("-" * 50)
-    send_telegram_report(analyzed, pdf_path, output_path, is_critical=is_critical_missing)
+    send_telegram_report(analyzed, pdf_path, output_path, is_critical=is_critical_missing, category_notes=category_notes or {})
 
     # 정상 완료 시 진행 파일 삭제
     PROGRESS_FILE.unlink(missing_ok=True)

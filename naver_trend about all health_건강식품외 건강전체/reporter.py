@@ -335,6 +335,7 @@ def format_report(
     scrape_results: Optional[dict] = None,
     trend_data: Optional[dict] = None,
     tv_data: Optional[dict] = None,
+    category_notes: Optional[dict] = None,
 ) -> str:
     """
     Format the final report combining the AI briefing with structured data.
@@ -502,6 +503,15 @@ def format_report(
     sections.append("  AI 시장 분석 브리핑")
     sections.append(f"{separator}\n")
     sections.append(briefing)
+
+    # Category name change / collection issue notes
+    if category_notes:
+        sections.append(f"\n## 🔔 카테고리 수집 이슈 ({len(category_notes)}건) — 확인 권장\n")
+        sections.append("  네이버 쇼핑인사이트 카테고리명이 변경되었거나 수집이 부분적으로 이루어진 항목입니다.")
+        sections.append("  카테고리명이 변경됐을 가능성이 있으면 scraper.py의 HEALTH_CATEGORIES를 확인해 주세요.\n")
+        for name, note in category_notes.items():
+            sections.append(f"  ▸ [{name}] {note}")
+        sections.append("")
 
     # API failure report
     api_failures = (trend_data or {}).get("_api_failures", {})

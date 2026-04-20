@@ -19,14 +19,25 @@ CACHE_MAX_AGE_HOURS = 24
 
 DATALAB_URL = "https://datalab.naver.com/shoppingInsight/sCategory.naver"
 
-# 수집 대상 카테고리 목록 (대분류, 중분류 or None)
-# 중분류가 None이면 대분류 전체(전체 또는 첫 번째 옵션)를 조회
+# 수집 대상 카테고리 목록 (대분류, 중분류 or None, 소분류 or None, 표시명)
+# - 중분류 None → 대분류 전체
+# - 소분류 None → 중분류 전체
 HEALTH_CATEGORIES = [
-    ("식품",        None,        "식품전체"),       # 건강식품·다이어트식품·음료·가루분말 등 포함
-    ("생활/건강",   None,        "생활건강전체"),    # 건강관리·당뇨·실버용품·반려동물 등 포함
-    ("출산/육아",   None,        "출산육아전체"),    # 아기간식·이유식·유아위생 등 포함
-    ("화장품/미용", None,        "화장품미용전체"),  # 약국화장품·선케어·마스크팩 등 포함
-    ("디지털/가전", "이미용가전", "이미용가전"),     # 메디큐브형 미용기기만 (노트북·가전 제외)
+    # 식품 전체 (건강식품·다이어트식품·음료·가루분말 등)
+    ("식품",        None,       None,              "식품전체"),
+    # 생활/건강 전체 (건강관리·당뇨·실버용품·반려동물 등)
+    ("생활/건강",   None,       None,              "생활건강전체"),
+    # 출산/육아 전체 (아기간식·이유식·유아위생 등)
+    ("출산/육아",   None,       None,              "출산육아전체"),
+    # 화장품/미용 전체 (약국화장품·선케어·마스크팩 등)
+    ("화장품/미용", None,       None,              "화장품미용전체"),
+    # 디지털/가전 — 건강·미용 관련 소분류만 선별
+    ("디지털/가전", "이미용가전",  None,            "이미용가전"),
+    ("디지털/가전", "생활가전",   "구강청정기",      "생활가전-구강청정기"),
+    ("디지털/가전", "생활가전",   "손소독기/손세정기","생활가전-손소독기"),
+    ("디지털/가전", "생활가전",   "적외선소독기",    "생활가전-적외선소독기"),
+    ("디지털/가전", "생활가전",   "이온수기",        "생활가전-이온수기"),
+    ("디지털/가전", "생활가전",   "해충퇴치기",      "생활가전-해충퇴치기"),
 ]
 
 # 카테고리당 수집 최대 키워드 수
@@ -98,166 +109,140 @@ def _parse_api_response(data: dict) -> list[dict]:
     return keywords
 
 
+async def _click_dropdown_option(page: Page, dropdown_idx: int, target: str) -> str:
+    """지정된 인덱스의 드롭다운에서 텍스트가 일치하는 옵션을 클릭. 결과 문자열 반환."""
+    # 드롭다운 열기
+    await page.evaluate(
+        """(idx) => {
+            var selects = document.querySelectorAll('.set_period.category .select');
+            if (selects.length > idx) {
+                var t = selects[idx].querySelector('.select_btn');
+                if (t) t.click();
+            }
+        }""",
+        dropdown_idx,
+    )
+    await asyncio.sleep(0.5)
+
+    for attempt in range(3):
+        result = await page.evaluate(
+            """([idx, target]) => {
+                var selects = document.querySelectorAll('.set_period.category .select');
+                if (selects.length <= idx) return 'no_dropdown:' + idx;
+                var opts = selects[idx].querySelectorAll('a.option');
+                var texts = [];
+                for (var i = 0; i < opts.length; i++) {
+                    var t = opts[i].textContent.trim();
+                    texts.push(t);
+                    if (t === target) {
+                        opts[i].click();
+                        return 'clicked:' + t;
+                    }
+                }
+                if (texts.length === 0) return 'no_options_yet';
+                return 'not_found:available=[' + texts.join('|') + ']';
+            }""",
+            [dropdown_idx, target],
+        )
+        if "clicked:" in result:
+            return result
+        if "no_options_yet" in result and attempt < 2:
+            await asyncio.sleep(2)
+            await page.evaluate(
+                """(idx) => {
+                    var selects = document.querySelectorAll('.set_period.category .select');
+                    if (selects.length > idx) {
+                        var t = selects[idx].querySelector('.select_btn');
+                        if (t) t.click();
+                    }
+                }""",
+                dropdown_idx,
+            )
+            await asyncio.sleep(0.5)
+            continue
+        break
+
+    return result
+
+
 async def _select_naver_category_by_name(
     page: Page,
     main_cat: str,
     sub_cat: Optional[str] = None,
-) -> bool:
+    sub_sub_cat: Optional[str] = None,
+) -> tuple[bool, str]:
     """
-    네이버 데이터랩 쇼핑인사이트에서 원하는 대분류(+중분류)를 텍스트로 선택합니다.
+    네이버 데이터랩 쇼핑인사이트에서 대분류 → 중분류 → 소분류(선택)를 선택합니다.
 
-    sub_cat이 None이면 대분류만 선택하고, 중분류는 '전체' 또는 기본값을 사용합니다.
+    Returns:
+        (success: bool, note: str)
+        note는 실패 또는 부분 성공 시 사유 메시지.
     """
-    # Step 1: 첫 번째 드롭다운 열기
-    try:
-        trigger_result = await page.evaluate("""
-            () => {
-                var selects = document.querySelectorAll('.set_period.category .select');
-                if (selects.length === 0) return 'no_selects';
-                var trigger = selects[0].querySelector('.select_btn');
-                if (!trigger) return 'no_trigger_in_first_select';
-                trigger.click();
-                return 'opened_first_dropdown:' + trigger.textContent.trim();
-            }
-        """)
-        print(f"[스크래퍼] 1번째 드롭다운 열기: {trigger_result}")
-    except Exception as e:
-        print(f"[스크래퍼] 1번째 드롭다운 열기 오류: {e}")
-        return False
+    # 1단계: 대분류 선택
+    r = await _click_dropdown_option(page, 0, main_cat)
+    print(f"[스크래퍼] 대분류 '{main_cat}': {r}")
+    if "not_found" in r or "no_dropdown" in r:
+        return False, f"대분류 '{main_cat}' 없음 — 카테고리명 변경 가능성"
 
-    await asyncio.sleep(0.5)
-
-    # Step 2: 대분류 클릭 (텍스트 매칭)
-    try:
-        main_result = await page.evaluate(
-            """(mainCat) => {
-                var selects = document.querySelectorAll('.set_period.category .select');
-                if (selects.length === 0) return 'no_selects';
-                var firstSelect = selects[0];
-                var allOpts = firstSelect.querySelectorAll('a.option');
-                for (var i = 0; i < allOpts.length; i++) {
-                    var t = allOpts[i].textContent.trim();
-                    if (t === mainCat) {
-                        allOpts[i].click();
-                        return 'clicked_main:' + t + ':idx=' + i;
-                    }
-                }
-                // 부분 일치도 시도 (화장품/미용 등 슬래시 포함)
-                for (var i = 0; i < allOpts.length; i++) {
-                    var t = allOpts[i].textContent.trim();
-                    if (t.includes(mainCat) || mainCat.includes(t)) {
-                        allOpts[i].click();
-                        return 'clicked_main_partial:' + t + ':idx=' + i;
-                    }
-                }
-                var all = [];
-                for (var i = 0; i < allOpts.length; i++) all.push(allOpts[i].textContent.trim());
-                return 'main_not_found:opts=[' + all.join('|') + ']';
-            }""",
-            main_cat,
-        )
-        print(f"[스크래퍼] 대분류 '{main_cat}' 선택: {main_result}")
-        if "not_found" in main_result:
-            return False
-    except Exception as e:
-        print(f"[스크래퍼] 대분류 클릭 오류: {e}")
-        return False
-
-    # Step 3: 두 번째 드롭다운 AJAX 로딩 대기
-    print(f"[스크래퍼] '{main_cat}' 하위 카테고리 로딩 대기 중...")
+    # 2단계: 중분류 AJAX 대기
+    print(f"[스크래퍼] '{main_cat}' 중분류 로딩 대기...")
     await asyncio.sleep(2)
 
-    # Step 4: 두 번째 드롭다운 열기
-    try:
-        trigger2_result = await page.evaluate("""
+    if sub_cat is None:
+        # 중분류 전체: '전체' 또는 첫 번째 옵션
+        r2 = await page.evaluate("""
             () => {
                 var selects = document.querySelectorAll('.set_period.category .select');
-                if (selects.length < 2) return 'only_' + selects.length + '_selects';
-                var trigger = selects[1].querySelector('.select_btn');
-                if (!trigger) return 'no_trigger_in_second_select';
-                trigger.click();
-                return 'opened_second_dropdown:' + trigger.textContent.trim();
+                if (selects.length < 2) return 'no_2nd';
+                var opts = selects[1].querySelectorAll('a.option');
+                for (var i = 0; i < opts.length; i++) {
+                    var t = opts[i].textContent.trim();
+                    if (t === '전체' || t === '전체보기') { opts[i].click(); return 'all:' + t; }
+                }
+                if (opts.length > 0) { opts[0].click(); return 'first:' + opts[0].textContent.trim(); }
+                return 'no_options';
             }
         """)
-        print(f"[스크래퍼] 2번째 드롭다운 열기: {trigger2_result}")
-    except Exception as e:
-        print(f"[스크래퍼] 2번째 드롭다운 열기 오류: {e}")
-
-    await asyncio.sleep(0.5)
-
-    if sub_cat is None:
-        # 중분류 없음 → 전체 선택 또는 그냥 진행
-        try:
-            whole_result = await page.evaluate("""
-                () => {
-                    var selects = document.querySelectorAll('.set_period.category .select');
-                    if (selects.length < 2) return 'no_second_select';
-                    var opts = selects[1].querySelectorAll('a.option');
-                    // '전체' 또는 첫 번째 옵션 클릭
-                    for (var i = 0; i < opts.length; i++) {
-                        var t = opts[i].textContent.trim();
-                        if (t === '전체' || t === '전체보기') {
-                            opts[i].click();
-                            return 'clicked_all:' + t;
-                        }
-                    }
-                    // 전체 없으면 첫 번째 옵션
-                    if (opts.length > 0) {
-                        opts[0].click();
-                        return 'clicked_first:' + opts[0].textContent.trim();
-                    }
-                    return 'no_options_in_second_dropdown';
-                }
-            """)
-            print(f"[스크래퍼] 중분류 '전체' 선택: {whole_result}")
-        except Exception as e:
-            print(f"[스크래퍼] 중분류 전체 선택 오류: {e}")
+        print(f"[스크래퍼] 중분류 전체: {r2}")
         await asyncio.sleep(1)
-        return True
+        return True, ""
 
-    # Step 5: 지정된 중분류 클릭
-    for attempt in range(3):
-        try:
-            sub_result = await page.evaluate(
-                """(subCat) => {
-                    var selects = document.querySelectorAll('.set_period.category .select');
-                    if (selects.length < 2) return 'not_enough_selects:' + selects.length;
-                    var opts = selects[1].querySelectorAll('a.option');
-                    var optTexts = [];
-                    for (var i = 0; i < opts.length; i++) {
-                        var t = opts[i].textContent.trim();
-                        optTexts.push(i + ':' + t);
-                        if (t === subCat) {
-                            opts[i].click();
-                            return 'clicked_sub:idx=' + i + ':cid=' + opts[i].getAttribute('data-cid');
-                        }
-                    }
-                    return 'sub_not_found:opts=[' + optTexts.join('|') + ']';
-                }""",
-                sub_cat,
-            )
-            print(f"[스크래퍼] 중분류 '{sub_cat}' 선택 시도 {attempt+1}: {sub_result}")
-            if "clicked_sub" in sub_result:
-                await asyncio.sleep(1)
-                return True
+    # 2단계: 지정된 중분류 클릭
+    r2 = await _click_dropdown_option(page, 1, sub_cat)
+    print(f"[스크래퍼] 중분류 '{sub_cat}': {r2}")
+    if "not_found" in r2:
+        # 실제 존재하는 옵션 목록 추출해서 메모
+        available = r2.split("available=[")[-1].rstrip("]") if "available=" in r2 else "확인필요"
+        return False, f"중분류 '{sub_cat}' 없음 (실제 목록: {available}) — 카테고리명 변경 가능성"
+    if "no_dropdown" in r2:
+        return False, f"중분류 드롭다운 없음"
 
-            await asyncio.sleep(2)
-            if attempt < 2:
-                await page.evaluate("""
-                    () => {
-                        var selects = document.querySelectorAll('.set_period.category .select');
-                        if (selects.length >= 2) {
-                            var t = selects[1].querySelector('.select_btn');
-                            if (t) t.click();
-                        }
-                    }
-                """)
-                await asyncio.sleep(0.5)
-        except Exception as e:
-            print(f"[스크래퍼] 중분류 선택 시도 {attempt+1} 오류: {e}")
-            await asyncio.sleep(1)
+    await asyncio.sleep(2)
 
-    return False
+    if sub_sub_cat is None:
+        return True, ""
+
+    # 3단계: 소분류 AJAX 대기 후 클릭
+    print(f"[스크래퍼] '{sub_cat}' 소분류 로딩 대기...")
+    await asyncio.sleep(2)
+
+    r3 = await _click_dropdown_option(page, 2, sub_sub_cat)
+    print(f"[스크래퍼] 소분류 '{sub_sub_cat}': {r3}")
+    if "clicked:" in r3:
+        await asyncio.sleep(1)
+        return True, ""
+    if "no_dropdown" in r3:
+        # 소분류 드롭다운 자체가 없음 → 중분류까지만 선택된 상태로 진행
+        note = f"소분류 '{sub_sub_cat}' 드롭다운 없음 — 중분류 '{sub_cat}' 전체로 수집"
+        print(f"[스크래퍼] {note}")
+        return True, note
+    if "not_found" in r3:
+        available = r3.split("available=[")[-1].rstrip("]") if "available=" in r3 else "확인필요"
+        note = f"소분류 '{sub_sub_cat}' 없음 (실제 목록: {available}) — 카테고리명 변경 가능성"
+        print(f"[스크래퍼] {note}")
+        return False, note
+
+    return True, ""
 
 
 async def _scrape_keywords_from_dom(page: Page) -> list[dict]:
@@ -315,12 +300,22 @@ async def get_top_keywords(
     period: str = "1년",
     main_cat: str = "식품",
     sub_cat: Optional[str] = None,
+    sub_sub_cat: Optional[str] = None,
     max_rank: int = MAX_RANK_PER_CATEGORY,
-) -> list[dict]:
+) -> tuple[list[dict], str]:
     """
     지정된 카테고리의 네이버 쇼핑인사이트 상위 키워드를 스크래핑합니다.
+
+    Returns:
+        (keywords: list[dict], failure_note: str)
+        failure_note는 카테고리 선택 실패/변경 시 사유 메시지 (정상이면 빈 문자열).
     """
-    print(f"\n[스크래퍼] === {main_cat}{' > ' + sub_cat if sub_cat else ' 전체'} | {period} 기간 스크래핑 시작 ===")
+    cat_label = main_cat
+    if sub_cat:
+        cat_label += f" > {sub_cat}"
+    if sub_sub_cat:
+        cat_label += f" > {sub_sub_cat}"
+    print(f"\n[스크래퍼] === {cat_label} | {period} 기간 스크래핑 시작 ===")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(
@@ -338,6 +333,7 @@ async def get_top_keywords(
         )
         page = await context.new_page()
         keywords = []
+        failure_note = ""
 
         try:
             print(f"[스크래퍼] 네이버 데이터랩 접속 중...")
@@ -345,11 +341,13 @@ async def get_top_keywords(
             await asyncio.sleep(3)
 
             # 카테고리 선택
-            category_selected = await _select_naver_category_by_name(page, main_cat, sub_cat)
-            if category_selected:
-                print(f"[스크래퍼] 카테고리 선택 완료: {main_cat}")
+            success, note = await _select_naver_category_by_name(page, main_cat, sub_cat, sub_sub_cat)
+            if note:
+                failure_note = note
+            if success:
+                print(f"[스크래퍼] 카테고리 선택 완료: {cat_label}{' (부분)' if note else ''}")
             else:
-                print(f"[스크래퍼] 카테고리 선택 실패 — 현재 카테고리로 계속")
+                print(f"[스크래퍼] 카테고리 선택 실패 — {note}")
 
             await asyncio.sleep(2)
 
@@ -444,8 +442,8 @@ async def get_top_keywords(
             await context.close()
             await browser.close()
 
-    print(f"[스크래퍼] {main_cat} / {period}: 총 {len(keywords)}개 키워드 수집 완료")
-    return keywords[:max_rank]
+    print(f"[스크래퍼] {cat_label} / {period}: 총 {len(keywords)}개 키워드 수집 완료")
+    return keywords[:max_rank], failure_note
 
 
 async def get_all_period_keywords(
@@ -453,7 +451,7 @@ async def get_all_period_keywords(
     use_cache: bool = True,
 ) -> dict:
     """
-    5개 건강 관련 대분류 × 3개 기간 = 총 15회 스크래핑하여 키워드를 수집합니다.
+    건강 관련 카테고리 × 3개 기간 스크래핑하여 키워드를 수집합니다.
 
     Returns:
         {
@@ -461,6 +459,7 @@ async def get_all_period_keywords(
             "3개월":  [...],
             "1개월":  [...],
             "combined": [unique keywords sorted by composite score],
+            "category_notes": {"display_name": "failure_note", ...},  # 카테고리 이슈 메모
             "cached_at": "ISO datetime"
         }
     """
@@ -472,17 +471,22 @@ async def get_all_period_keywords(
     results: dict[str, list] = {"1년": [], "3개월": [], "1개월": []}
     periods = ["1년", "3개월", "1개월"]
     period_weights = {"1년": 1, "3개월": 2, "1개월": 3}
+    category_notes: dict[str, str] = {}  # display_name → 최초 발견된 이슈 메모
 
-    for main_cat, sub_cat, display_name in HEALTH_CATEGORIES:
+    for main_cat, sub_cat, sub_sub_cat, display_name in HEALTH_CATEGORIES:
         print(f"\n[스크래퍼] ===== 카테고리: {display_name} =====")
         for period in periods:
             try:
-                keywords = await get_top_keywords(
+                keywords, note = await get_top_keywords(
                     period=period,
                     main_cat=main_cat,
                     sub_cat=sub_cat,
+                    sub_sub_cat=sub_sub_cat,
                     max_rank=max_rank,
                 )
+                # 카테고리 이슈 메모 수집 (중복 저장 방지)
+                if note and display_name not in category_notes:
+                    category_notes[display_name] = note
                 # 카테고리 정보 태그 추가
                 for kw in keywords:
                     kw["category"] = display_name
@@ -521,9 +525,15 @@ async def get_all_period_keywords(
         for i, kw in enumerate(combined)
     ]
 
+    results["category_notes"] = category_notes
+
     print(f"\n[스크래퍼] 전체 고유 키워드 수: {len(combined)}개")
     if combined[:5]:
         print(f"[스크래퍼] 상위 5개: {', '.join(k['keyword'] for k in combined[:5])}")
+    if category_notes:
+        print(f"[스크래퍼] 카테고리 이슈 감지: {len(category_notes)}건")
+        for name, note in category_notes.items():
+            print(f"  - {name}: {note}")
 
     _save_cache(results)
     return results
