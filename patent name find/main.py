@@ -16,6 +16,9 @@ from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
 
+# VM 환경에서 현재 디렉토리를 모듈 경로에 추가
+sys.path.insert(0, str(Path(__file__).parent))
+
 BASE_DIR    = Path(__file__).parent
 REPORTS_DIR = BASE_DIR / "reports"
 
@@ -53,20 +56,17 @@ def main():
     report_path = generate_html(data, REPORTS_DIR)
 
     # ── 3. 텔레그램 전송 ────────────────────────────────────
-    base_url   = os.getenv("REPORT_BASE_URL", "http://35.222.61.113:8080").rstrip("/")
-    report_url = f"{base_url}/{report_path.name}"
-
     print(f"\n[3/3] 텔레그램 전송 중...")
     if send_telegram_flag:
         from notifier import send_telegram
         candidates = data.get("candidates", [])
-        send_telegram(report_url, date_str, candidates[:3])
+        send_telegram(report_path, date_str, candidates[:3])
     else:
         print("  (--no-telegram 옵션으로 생략)")
 
     print(f"\n{'=' * 55}")
     print(f"  완료!")
-    print(f"  보고서 URL: {report_url}")
+    print(f"  보고서 파일: {report_path}")
     print(f"{'=' * 55}")
 
 
