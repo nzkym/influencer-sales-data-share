@@ -54,15 +54,21 @@ def _fmt_date(date_str: str) -> str:
         return date_str
 
 
-def _extract_box_count(option: str) -> int:
-    """옵션명에서 박스 수량 추출. 예: '12BOX' → 12, '12박스' → 12, '12bx' → 12"""
-    match = re.search(r'(\d+)\s*(BOX|박스|bx)', option, re.IGNORECASE)
+def _extract_box_count(option: str, unit_keyword: str = "") -> int:
+    """옵션명에서 박스 수량 추출.
+    unit_keyword 지정 시 해당 키워드 앞 숫자를 사용. 예: 'bx' → '12bx'에서 12
+    미지정 시 BOX|박스|bx 순서로 시도.
+    """
+    if unit_keyword:
+        match = re.search(r'(\d+)\s*' + re.escape(unit_keyword), option, re.IGNORECASE)
+    else:
+        match = re.search(r'(\d+)\s*(BOX|박스|bx)', option, re.IGNORECASE)
     if match:
         return int(match.group(1))
-    return 1  # BOX 수량 없으면 1개로 간주
+    return 1
 
 
-def _aggregate(sales_data: list) -> list:
+def _aggregate(sales_data: list, unit_keyword: str = "") -> list:
     """날짜×옵션별 집계 (주문수 + 제품수)"""
     agg = defaultdict(lambda: defaultdict(int))
     for row in sales_data:
@@ -72,7 +78,7 @@ def _aggregate(sales_data: list) -> list:
     for date in sorted(agg.keys()):
         for option in sorted(agg[date].keys()):
             daily_orders = agg[date][option]
-            box_count = _extract_box_count(option)
+            box_count = _extract_box_count(option, unit_keyword)
             daily_products = daily_orders * box_count
             rows.append({
                 "date": date,
@@ -101,6 +107,7 @@ def write_to_sheet(
     product_title: str,
     sales_data: list,
     date_from: str = "",   # "2026-04-06" 형식 (D+일 계산용)
+    unit_keyword: str = "", # 캠페인 시트의 "단위키워드" 열 값. 예: "bx", "박스", "BOX"
 ):
     from datetime import timezone, timedelta, date as date_type
     KST = timezone(timedelta(hours=9))
@@ -122,7 +129,7 @@ def write_to_sheet(
     if ws.title != "판매현황":
         ws.update_title("판매현황")
 
-    aggregated = _aggregate(sales_data)
+    aggregated = _aggregate(sales_data, unit_keyword)
     daily_totals = _daily_totals(aggregated)
     total_orders = sum(r["orders"] for r in daily_totals)
     total_products = sum(r["products"] for r in daily_totals)
