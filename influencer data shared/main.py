@@ -15,7 +15,7 @@ import sys
 import time
 import schedule
 import requests as _requests
-from datetime import datetime, date
+from datetime import datetime, date, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 
@@ -107,7 +107,8 @@ def load_campaigns() -> list:
         print(f"[오류] 캠페인 시트 읽기 실패: {e}")
         return []
 
-    today = date.today()
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
     campaigns = []
 
     for row in rows:
