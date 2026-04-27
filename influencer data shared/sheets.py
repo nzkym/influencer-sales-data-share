@@ -55,14 +55,18 @@ def _fmt_date(date_str: str) -> str:
 
 
 def _extract_box_count(option: str, unit_keyword: str = "") -> int:
-    """옵션명에서 박스 수량 추출.
-    unit_keyword 지정 시 해당 키워드 앞 숫자를 사용. 예: 'bx' → '12bx'에서 12
-    미지정 시 BOX|박스|bx 순서로 시도.
+    """옵션명에서 수량 단위 자동 추출.
+    unit_keyword 지정 시 해당 키워드를 우선 사용.
+    미지정 시 한국 이커머스에서 쓰이는 단위를 자동 인식.
     """
     if unit_keyword:
         match = re.search(r'(\d+)\s*' + re.escape(unit_keyword), option, re.IGNORECASE)
-    else:
-        match = re.search(r'(\d+)\s*(BOX|박스|bx)', option, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+    match = re.search(
+        r'(\d+)\s*(BOX|박스|bx|개입|세트|set|팩|pack|구|EA|캔|병|통|봉)',
+        option, re.IGNORECASE
+    )
     if match:
         return int(match.group(1))
     return 1

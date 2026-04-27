@@ -112,13 +112,12 @@ def load_campaigns() -> list:
 
     for row in rows:
         try:
-            title        = str(row.get("제목") or "").strip()
-            start_str    = str(row.get("시작일자") or "").strip()
-            end_str      = str(row.get("종료일자") or "").strip()
-            url          = str(row.get("상품링크") or "").strip()
-            sheet_url    = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
-            store        = str(row.get("스토어") or "").strip().lower()
-            unit_keyword = str(row.get("단위키워드") or "").strip()
+            title     = str(row.get("제목") or "").strip()
+            start_str = str(row.get("시작일자") or "").strip()
+            end_str   = str(row.get("종료일자") or "").strip()
+            url       = str(row.get("상품링크") or "").strip()
+            sheet_url = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
+            store     = str(row.get("스토어") or "").strip().lower()
 
             if not all([title, start_str, end_str, url, sheet_url, store]):
                 continue
@@ -139,14 +138,13 @@ def load_campaigns() -> list:
                 continue
 
             campaigns.append({
-                "title":        title,
-                "product_no":   extract_product_no(url),
-                "date_from":    start_date.strftime("%Y-%m-%d"),
-                "date_to":      end_date.strftime("%Y-%m-%d"),
-                "sheet_url":    sheet_url,
-                "api_id":       api_id,
-                "api_secret":   api_secret,
-                "unit_keyword": unit_keyword,
+                "title":      title,
+                "product_no": extract_product_no(url),
+                "date_from":  start_date.strftime("%Y-%m-%d"),
+                "date_to":    end_date.strftime("%Y-%m-%d"),
+                "sheet_url":  sheet_url,
+                "api_id":     api_id,
+                "api_secret": api_secret,
             })
         except Exception as e:
             print(f"  [경고] 행 파싱 오류: {e}")
@@ -188,7 +186,6 @@ def run_once():
                 product_title=campaign["title"],
                 sales_data=sales,
                 date_from=campaign["date_from"],
-                unit_keyword=campaign["unit_keyword"],
             )
             print(f"  완료\n")
         except Exception as e:
