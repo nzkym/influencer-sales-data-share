@@ -55,8 +55,8 @@ def _fmt_date(date_str: str) -> str:
 
 
 def _extract_box_count(option: str) -> int:
-    """옵션명에서 박스 수량 추출. 예: '선택: 12BOX(50%)' → 12"""
-    match = re.search(r'(\d+)\s*BOX', option, re.IGNORECASE)
+    """옵션명에서 박스 수량 추출. 예: '선택: 12BOX(50%)' → 12, '12박스' → 12"""
+    match = re.search(r'(\d+)\s*(BOX|박스)', option, re.IGNORECASE)
     if match:
         return int(match.group(1))
     return 1  # BOX 수량 없으면 1개로 간주
