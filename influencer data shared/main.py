@@ -47,6 +47,41 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
+# 마스터 시트 '재고' 열 서식 색상
+_COLOR_INV_HEADER = {"red": 0.87, "green": 0.17, "blue": 0.17}   # 빨강
+_COLOR_INV_DATA   = {"red": 1.0,  "green": 0.95, "blue": 0.60}   # 노랑
+_COLOR_WHITE      = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
+
+
+def _setup_inventory_column(ws, spreadsheet):
+    """마스터 시트에 '재고' 열이 없으면 추가하고 빨강/노랑 서식 적용 (최초 1회)."""
+    header_row = ws.row_values(1)
+    if "재고" in header_row:
+        return
+    col_idx = len(header_row)          # 0-based: 현재 마지막 열 다음
+    col_letter = chr(ord("A") + col_idx)
+    ws.update(f"{col_letter}1", [["재고"]])
+    n_rows = max(ws.row_count or 0, 100)
+    spreadsheet.batch_update({"requests": [
+        {"repeatCell": {
+            "range": {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": 1,
+                      "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": _COLOR_INV_HEADER,
+                "textFormat": {"bold": True, "foregroundColor": _COLOR_WHITE},
+                "horizontalAlignment": "CENTER",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+        }},
+        {"repeatCell": {
+            "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": n_rows,
+                      "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
+            "cell": {"userEnteredFormat": {"backgroundColor": _COLOR_INV_DATA}},
+            "fields": "userEnteredFormat(backgroundColor)",
+        }},
+    ]})
+    print(f"[마스터시트] '재고' 열 추가 완료 ({col_letter}열, 빨강/노랑 서식 적용)")
+
 
 # ── 텔레그램 알림 ────────────────────────────────────────
 def send_telegram(message: str):
@@ -102,6 +137,10 @@ def load_campaigns() -> list:
             ws = next(s for s in spreadsheet.worksheets() if s.id == gid)
         else:
             ws = spreadsheet.sheet1
+        try:
+            _setup_inventory_column(ws, spreadsheet)
+        except Exception as fe:
+            print(f"  [경고] 재고 열 설정 오류 (무시): {fe}")
         rows = ws.get_all_records()
     except Exception as e:
         print(f"[오류] 캠페인 시트 읽기 실패: {e}")
@@ -122,6 +161,13 @@ def load_campaigns() -> list:
 
             if not all([title, start_str, end_str, url, sheet_url, store]):
                 continue
+
+            # 재고 읽기 — "0" 또는 "품절/소진/종료" 표시 시 해당 캠페인 스킵
+            inventory_raw = str(row.get("재고") or "").strip()
+            if inventory_raw == "0" or inventory_raw.lower() in ("품절", "소진", "종료"):
+                print(f"  [스킵] '{title}': 재고 소진으로 캠페인 제외")
+                continue
+            inventory = int(inventory_raw) if inventory_raw.isdigit() else None
 
             if store not in STORE_CREDENTIALS:
                 print(f"  [경고] 알 수 없는 스토어명: '{store}' (nutone/jdhealth/nutpet 중 하나여야 합니다)")
@@ -146,6 +192,7 @@ def load_campaigns() -> list:
                 "sheet_url":  sheet_url,
                 "api_id":     api_id,
                 "api_secret": api_secret,
+                "inventory":  inventory,
             })
         except Exception as e:
             print(f"  [경고] 행 파싱 오류: {e}")
@@ -187,11 +234,19 @@ def run_once():
                 product_title=campaign["title"],
                 sales_data=sales,
                 date_from=campaign["date_from"],
+                inventory=campaign.get("inventory"),
             )
             print(f"  완료\n")
         except Exception as e:
             print(f"  [오류] {e}\n")
             err_str = str(e)
+            err_lower = err_str.lower()
+            # 품절·판매중지·404 오류는 Telegram 알림 없이 조용히 넘어감
+            if ("404" in err_str or "not found" in err_lower
+                    or "품절" in err_str or "sold_out" in err_lower
+                    or "no such product" in err_lower):
+                print(f"  [스킵] 품절 또는 판매중지 상품으로 판단 — 오류 알림 생략\n")
+                continue
             if "403" in err_str or "Forbidden" in err_str:
                 cause = "네이버 API 인증 오류 (IP 차단 또는 API 키 만료)"
                 action = "→ 네이버 커머스 API에서 IP 및 API 키를 확인해주세요"

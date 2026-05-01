@@ -110,8 +110,9 @@ def write_to_sheet(
     spreadsheet_url: str,
     product_title: str,
     sales_data: list,
-    date_from: str = "",   # "2026-04-06" 형식 (D+일 계산용)
+    date_from: str = "",    # "2026-04-06" 형식 (D+일 계산용)
     unit_keyword: str = "", # 캠페인 시트의 "단위키워드" 열 값. 예: "bx", "박스", "BOX"
+    inventory: int = None,  # 초기 재고 수량. None이면 재고 표시 안 함
 ):
     from datetime import timezone, timedelta, date as date_type
     KST = timezone(timedelta(hours=9))
@@ -162,8 +163,17 @@ def write_to_sheet(
     values.append(title_row)
     # 행2: 업데이트 시각
     values.append([f"마지막 업데이트: {updated_at}", "", "", "", "", ""])
-    # 행3: 총계
-    values.append([f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개", "", "", "", "", ""])
+    # 행3: 총계 (+ 재고 정보 — 입력된 경우만)
+    if inventory is not None:
+        remaining = max(0, inventory - total_products)
+        values.append([
+            f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개",
+            "", "", "", "",
+            f"📦 초기재고: {inventory:,}개  |  남은재고: {remaining:,}개",
+            "",
+        ])
+    else:
+        values.append([f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개", "", "", "", "", ""])
     # 행4: 주의사항
     values.append([DISCLAIMER, "", "", "", "", ""])
     # 행5: 빈 줄
