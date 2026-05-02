@@ -256,21 +256,29 @@ def run_once():
                 date_from=campaign["date_from"],
                 inventory=campaign.get("inventory"),
             )
-            # 재고가 설정되어 있고 남은재고가 0 이하 → 품절 알림 (최초 1회)
             product_no = campaign["product_no"]
-            if remaining is not None and remaining <= 0 and product_no not in soldout_notified:
-                inv = campaign.get("inventory") or 0
-                send_telegram(
-                    f"🔴 [품절 알림]\n\n"
-                    f"📦 상품명: {campaign['title'][:40]}\n"
-                    f"📊 초기재고: {inv:,}개\n"
-                    f"✅ 판매 완료: 재고 소진\n"
-                    f"🏪 스토어: {next((k for k, v in STORE_CREDENTIALS.items() if v[0] == campaign.get('api_id')), '')}\n\n"
-                    f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
-                )
-                soldout_notified.add(product_no)
-                _save_soldout_notified(soldout_notified)
-                print(f"  [품절 알림] 텔레그램 발송 완료")
+            if remaining is not None:
+                if remaining <= 0:
+                    # 남은재고 0 → 품절 알림 (아직 알림 안 보낸 경우만)
+                    if product_no not in soldout_notified:
+                        inv = campaign.get("inventory") or 0
+                        send_telegram(
+                            f"🔴 [품절 알림]\n\n"
+                            f"📦 상품명: {campaign['title'][:40]}\n"
+                            f"📊 초기재고: {inv:,}개\n"
+                            f"✅ 판매 완료: 재고 소진\n"
+                            f"🏪 스토어: {next((k for k, v in STORE_CREDENTIALS.items() if v[0] == campaign.get('api_id')), '')}\n\n"
+                            f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                        )
+                        soldout_notified.add(product_no)
+                        _save_soldout_notified(soldout_notified)
+                        print(f"  [품절 알림] 텔레그램 발송 완료")
+                else:
+                    # 재고 보충됨 → 알림 기록 초기화 (다음 품절 시 재알림 가능)
+                    if product_no in soldout_notified:
+                        soldout_notified.discard(product_no)
+                        _save_soldout_notified(soldout_notified)
+                        print(f"  [재고 보충 감지] 품절 알림 기록 초기화")
             print(f"  완료\n")
         except Exception as e:
             print(f"  [오류] {e}\n")
