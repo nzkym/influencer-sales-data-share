@@ -19,6 +19,7 @@ from datetime import datetime, date, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 
+import json
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -51,6 +52,23 @@ SCOPES = [
 _COLOR_INV_HEADER = {"red": 0.87, "green": 0.17, "blue": 0.17}   # 빨강
 _COLOR_INV_DATA   = {"red": 1.0,  "green": 0.95, "blue": 0.60}   # 노랑
 _COLOR_WHITE      = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
+
+
+SOLDOUT_NOTIFIED_FILE = BASE_DIR / "soldout_notified.json"
+
+
+def _load_soldout_notified() -> set:
+    """품절 알림을 이미 보낸 상품번호 목록 로드."""
+    try:
+        if SOLDOUT_NOTIFIED_FILE.exists():
+            return set(json.loads(SOLDOUT_NOTIFIED_FILE.read_text(encoding="utf-8")))
+    except Exception:
+        pass
+    return set()
+
+
+def _save_soldout_notified(notified: set):
+    SOLDOUT_NOTIFIED_FILE.write_text(json.dumps(list(notified)), encoding="utf-8")
 
 
 def _setup_inventory_column(ws, spreadsheet):
@@ -219,6 +237,8 @@ def run_once():
 
     print(f"  진행 중인 캠페인: {len(campaigns)}개\n")
 
+    soldout_notified = _load_soldout_notified()
+
     for i, campaign in enumerate(campaigns, 1):
         print(f"[{i}/{len(campaigns)}] {campaign['title'][:45]}")
         try:
@@ -229,13 +249,28 @@ def run_once():
                 date_from=campaign["date_from"],
                 date_to=campaign["date_to"],
             )
-            sheets.write_to_sheet(
+            remaining = sheets.write_to_sheet(
                 spreadsheet_url=campaign["sheet_url"],
                 product_title=campaign["title"],
                 sales_data=sales,
                 date_from=campaign["date_from"],
                 inventory=campaign.get("inventory"),
             )
+            # 재고가 설정되어 있고 남은재고가 0 이하 → 품절 알림 (최초 1회)
+            product_no = campaign["product_no"]
+            if remaining is not None and remaining <= 0 and product_no not in soldout_notified:
+                inv = campaign.get("inventory") or 0
+                send_telegram(
+                    f"🔴 [품절 알림]\n\n"
+                    f"📦 상품명: {campaign['title'][:40]}\n"
+                    f"📊 초기재고: {inv:,}개\n"
+                    f"✅ 판매 완료: 재고 소진\n"
+                    f"🏪 스토어: {next((k for k, v in STORE_CREDENTIALS.items() if v[0] == campaign.get('api_id')), '')}\n\n"
+                    f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+                )
+                soldout_notified.add(product_no)
+                _save_soldout_notified(soldout_notified)
+                print(f"  [품절 알림] 텔레그램 발송 완료")
             print(f"  완료\n")
         except Exception as e:
             print(f"  [오류] {e}\n")

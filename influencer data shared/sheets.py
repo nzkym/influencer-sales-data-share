@@ -164,6 +164,7 @@ def write_to_sheet(
     # 행2: 업데이트 시각
     values.append([f"마지막 업데이트: {updated_at}", "", "", "", "", ""])
     # 행3: 총계 (+ 재고 정보 — 입력된 경우만)
+    remaining = None
     if inventory is not None:
         remaining = max(0, inventory - total_products)
         values.append([
@@ -425,3 +426,4 @@ def write_to_sheet(
 
     print(f"  → 구글 시트 업데이트 완료 ({len(aggregated)}행 + 그래프)")
     print(f"  → 시트 링크: {spreadsheet_url}")
+    return remaining  # None이면 재고 미설정, 0 이하면 품절
