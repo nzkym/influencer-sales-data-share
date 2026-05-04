@@ -142,12 +142,13 @@ def load_campaigns() -> list:
             if not all([title, start_str, end_str, url, sheet_url, store]):
                 continue
 
-            # 재고 읽기 — "0" 또는 "품절/소진/종료" 표시 시 해당 캠페인 스킵
-            inventory_raw = str(row.get("재고") or "").strip()
+            # 재고 읽기 — 헤더에 "재고"가 포함된 열을 유연하게 탐색
+            inventory_key = next((k for k in row.keys() if "재고" in k), None)
+            inventory_raw = str(row.get(inventory_key) or "").strip() if inventory_key else ""
             if inventory_raw == "0" or inventory_raw.lower() in ("품절", "소진", "종료"):
                 print(f"  [스킵] '{title}': 재고 소진으로 캠페인 제외")
                 continue
-            inventory = int(inventory_raw) if inventory_raw.isdigit() else None
+            inventory = int(inventory_raw.replace(",", "")) if inventory_raw.replace(",", "").isdigit() else None
 
             if store not in STORE_CREDENTIALS:
                 print(f"  [경고] 알 수 없는 스토어명: '{store}' (nutone/jdhealth/nutpet 중 하나여야 합니다)")
