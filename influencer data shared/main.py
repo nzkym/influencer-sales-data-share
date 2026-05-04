@@ -48,12 +48,6 @@ SCOPES = [
     "https://www.googleapis.com/auth/drive",
 ]
 
-# 마스터 시트 '재고' 열 서식 색상
-_COLOR_INV_HEADER = {"red": 0.87, "green": 0.17, "blue": 0.17}   # 빨강
-_COLOR_INV_DATA   = {"red": 1.0,  "green": 0.95, "blue": 0.60}   # 노랑
-_COLOR_WHITE      = {"red": 1.0,  "green": 1.0,  "blue": 1.0}
-
-
 SOLDOUT_NOTIFIED_FILE = BASE_DIR / "soldout_notified.json"
 
 
@@ -71,34 +65,6 @@ def _save_soldout_notified(notified: set):
     SOLDOUT_NOTIFIED_FILE.write_text(json.dumps(list(notified)), encoding="utf-8")
 
 
-def _setup_inventory_column(ws, spreadsheet):
-    """마스터 시트에 '재고' 열이 없으면 추가하고 빨강/노랑 서식 적용 (최초 1회)."""
-    header_row = ws.row_values(1)
-    if "재고" in header_row:
-        return
-    col_idx = len(header_row)          # 0-based: 현재 마지막 열 다음
-    col_letter = chr(ord("A") + col_idx)
-    ws.update(f"{col_letter}1", [["재고"]])
-    n_rows = max(ws.row_count or 0, 100)
-    spreadsheet.batch_update({"requests": [
-        {"repeatCell": {
-            "range": {"sheetId": ws.id, "startRowIndex": 0, "endRowIndex": 1,
-                      "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
-            "cell": {"userEnteredFormat": {
-                "backgroundColor": _COLOR_INV_HEADER,
-                "textFormat": {"bold": True, "foregroundColor": _COLOR_WHITE},
-                "horizontalAlignment": "CENTER",
-            }},
-            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-        }},
-        {"repeatCell": {
-            "range": {"sheetId": ws.id, "startRowIndex": 1, "endRowIndex": n_rows,
-                      "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1},
-            "cell": {"userEnteredFormat": {"backgroundColor": _COLOR_INV_DATA}},
-            "fields": "userEnteredFormat(backgroundColor)",
-        }},
-    ]})
-    print(f"[마스터시트] '재고' 열 추가 완료 ({col_letter}열, 빨강/노랑 서식 적용)")
 
 
 # ── 텔레그램 알림 ────────────────────────────────────────
@@ -155,10 +121,6 @@ def load_campaigns() -> list:
             ws = next(s for s in spreadsheet.worksheets() if s.id == gid)
         else:
             ws = spreadsheet.sheet1
-        try:
-            _setup_inventory_column(ws, spreadsheet)
-        except Exception as fe:
-            print(f"  [경고] 재고 열 설정 오류 (무시): {fe}")
         rows = ws.get_all_records()
     except Exception as e:
         print(f"[오류] 캠페인 시트 읽기 실패: {e}")
