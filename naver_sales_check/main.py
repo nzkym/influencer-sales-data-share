@@ -115,7 +115,8 @@ def _query_orders_one_day(headers: dict, from_str: str, to_str: str) -> list:
 
 
 def get_store_total_sales(client_id: str, client_secret: str,
-                          date_from: str, date_to: str) -> int:
+                          date_from: str, date_to: str,
+                          debug_first: bool = False) -> int:
     """
     기간 내 스토어 전체 결제금액 합산 (원).
     date_from, date_to: "2026-04-06" 형식
@@ -130,6 +131,8 @@ def get_store_total_sales(client_id: str, client_secret: str,
     actual_end = min(end_dt, yesterday)
 
     total = 0
+    first_order_logged = False
+
     while current <= actual_end:
         next_day = current + timedelta(days=1)
         from_str = current.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
@@ -142,6 +145,14 @@ def get_store_total_sales(client_id: str, client_secret: str,
             po = item.get("content", {}).get("productOrder", {})
             if po.get("productOrderStatus", "") not in SALE_STATUSES:
                 continue
+
+            # 첫 번째 주문의 필드 구조 디버그 출력 (API 필드명 확인용)
+            if debug_first and not first_order_logged:
+                print(f"    [디버그] productOrder 필드 목록: {list(po.keys())}")
+                print(f"    [디버그] totalPaymentAmount={po.get('totalPaymentAmount')}, "
+                      f"unitPrice={po.get('unitPrice')}, quantity={po.get('quantity')}")
+                first_order_logged = True
+
             # totalPaymentAmount 우선, 없으면 quantity × unitPrice
             amount = po.get("totalPaymentAmount") or po.get("paymentAmount")
             if not amount:
@@ -266,13 +277,18 @@ def run_once():
         print(f"  집계: {promo_start}~{promo_actual_end} ({elapsed_days}일 경과)")
         print(f"  비교: {comp_start}~{comp_end} ({promo_total_days}일)")
 
-        # 행사기간 매출 조회
+        # 행사기간 매출 조회 (첫 번째 행에서만 디버그 출력)
         print(f"  ▷ 행사기간 매출 조회 중...")
+        is_first_row = (row_idx == next(
+            (i for i, r in enumerate(all_values) if i > 0 and len(r) >= 3
+             and r[1].strip() and r[2].strip()), 1
+        ))
         try:
             promo_sales = get_store_total_sales(
                 client_id, client_secret,
                 promo_start.strftime("%Y-%m-%d"),
                 promo_actual_end.strftime("%Y-%m-%d"),
+                debug_first=is_first_row,
             )
         except Exception as e:
             print(f"  [오류] 행사매출 조회 실패: {e}")
