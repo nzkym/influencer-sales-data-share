@@ -181,6 +181,141 @@ def load_campaigns() -> list:
     return campaigns
 
 
+# ── 캠페인 전체 목록 읽기 (종료된 것 포함) ───────────────
+def load_all_campaigns() -> list:
+    """시작일이 오늘 이전인 모든 캠페인 반환 (종료 포함)."""
+    if not MASTER_SHEET_URL:
+        return []
+
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        spreadsheet = client.open_by_key(sheet_id)
+        gid_match = re.search(r"gid=(\d+)", MASTER_SHEET_URL)
+        if gid_match:
+            gid = int(gid_match.group(1))
+            ws = next(s for s in spreadsheet.worksheets() if s.id == gid)
+        else:
+            ws = spreadsheet.sheet1
+        rows = ws.get_all_records()
+    except Exception as e:
+        print(f"[오류] 캠페인 시트 읽기 실패: {e}")
+        return []
+
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    campaigns = []
+
+    for row in rows:
+        try:
+            title     = str(row.get("제목") or "").strip()
+            start_str = str(row.get("시작일자") or "").strip()
+            end_str   = str(row.get("종료일자") or "").strip()
+            url       = str(row.get("상품링크") or "").strip()
+            store     = str(row.get("스토어") or "").strip().lower()
+
+            if not all([title, start_str, end_str, url, store]):
+                continue
+            if store not in STORE_CREDENTIALS:
+                continue
+
+            api_id, api_secret = STORE_CREDENTIALS[store]
+            if not api_id or not api_secret:
+                continue
+
+            start_date = parse_date(start_str)
+            end_date   = parse_date(end_str)
+
+            if start_date > today:
+                continue
+
+            campaigns.append({
+                "title":     title,
+                "product_no": extract_product_no(url),
+                "date_from":  start_date.strftime("%Y-%m-%d"),
+                "date_to":    end_date.strftime("%Y-%m-%d"),
+                "api_id":     api_id,
+                "api_secret": api_secret,
+                "store":      store,
+                "is_ended":   end_date < today,
+            })
+        except Exception as e:
+            print(f"  [경고] 행 파싱 오류: {e}")
+
+    return campaigns
+
+
+def _calc_totals(sales_data: list) -> tuple:
+    """판매 데이터에서 총 주문수, 총 제품수 계산."""
+    total_orders = 0
+    total_products = 0
+    for s in sales_data:
+        qty = s["quantity"]
+        match = re.search(r'(\d+)\s*BOX', s.get("option", ""), re.IGNORECASE)
+        box = int(match.group(1)) if match else 1
+        total_orders += qty
+        total_products += qty * box
+    return total_orders, total_products
+
+
+def update_summary_tab():
+    """마스터 시트의 '캠페인 실적' 탭 업데이트."""
+    KST = timezone(timedelta(hours=9))
+    all_campaigns = load_all_campaigns()
+    if not all_campaigns:
+        return
+
+    existing = sheets.read_summary_tab(MASTER_SHEET_URL)
+    print(f"\n  [실적 집계] 캠페인 {len(all_campaigns)}개 처리 중...")
+
+    summary_rows = []
+    for campaign in all_campaigns:
+        title    = campaign["title"]
+        is_ended = campaign["is_ended"]
+
+        # 종료된 캠페인이 이미 실적 탭에 있으면 재조회 생략
+        if is_ended and title in existing:
+            summary_rows.append(existing[title])
+            continue
+
+        try:
+            sales = naver_api.get_sales_data(
+                client_id=campaign["api_id"],
+                client_secret=campaign["api_secret"],
+                product_no=campaign["product_no"],
+                date_from=campaign["date_from"],
+                date_to=campaign["date_to"],
+            )
+            total_orders, total_products = _calc_totals(sales)
+        except Exception:
+            if title in existing:
+                summary_rows.append(existing[title])
+            else:
+                summary_rows.append({
+                    "title": title, "store": campaign["store"],
+                    "date_from": campaign["date_from"], "date_to": campaign["date_to"],
+                    "total_orders": "-", "total_products": "-",
+                    "status": "완료" if is_ended else "진행중",
+                    "updated_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+                })
+            continue
+
+        summary_rows.append({
+            "title":          title,
+            "store":          campaign["store"],
+            "date_from":      campaign["date_from"],
+            "date_to":        campaign["date_to"],
+            "total_orders":   total_orders,
+            "total_products": total_products,
+            "status":         "완료" if is_ended else "진행중",
+            "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+        })
+
+    sheets.write_summary_tab(MASTER_SHEET_URL, summary_rows)
+    print(f"  → 캠페인 실적 탭 업데이트 완료 ({len(summary_rows)}건)\n")
+
+
 # ── 메인 실행 ────────────────────────────────────────────
 def run_once():
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -279,6 +414,7 @@ def run_once():
                 f"🕐 발생시각: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
 
+    update_summary_tab()
     print(f"{'='*55}\n")
 
 

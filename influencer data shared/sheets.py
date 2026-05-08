@@ -106,6 +106,111 @@ def _daily_totals(aggregated: list) -> list:
     ]
 
 
+def read_summary_tab(spreadsheet_url: str) -> dict:
+    """'캠페인 실적' 탭 읽기. 반환: {제목: row_dict}"""
+    try:
+        client = _get_client()
+        sheet_id = _extract_sheet_id(spreadsheet_url)
+        spreadsheet = client.open_by_key(sheet_id)
+        ws = spreadsheet.worksheet("캠페인 실적")
+        records = ws.get_all_records()
+        result = {}
+        for row in records:
+            title = str(row.get("제목", "")).strip()
+            if title:
+                result[title] = {
+                    "title":          title,
+                    "store":          str(row.get("스토어", "")),
+                    "date_from":      str(row.get("시작일", "")),
+                    "date_to":        str(row.get("종료일", "")),
+                    "total_orders":   row.get("주문수", 0),
+                    "total_products": row.get("제품수", 0),
+                    "status":         str(row.get("상태", "")),
+                    "updated_at":     str(row.get("업데이트", "")),
+                }
+        return result
+    except Exception:
+        return {}
+
+
+def write_summary_tab(spreadsheet_url: str, summary_rows: list):
+    """마스터 시트의 '캠페인 실적' 탭 전체 업데이트."""
+    client = _get_client()
+    sheet_id = _extract_sheet_id(spreadsheet_url)
+    spreadsheet = client.open_by_key(sheet_id)
+
+    try:
+        ws = spreadsheet.worksheet("캠페인 실적")
+    except gspread.WorksheetNotFound:
+        ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=10)
+
+    header = ["No", "제목", "스토어", "시작일", "종료일", "주문수", "제품수", "상태", "업데이트"]
+    values = [header]
+    for i, row in enumerate(summary_rows, 1):
+        values.append([
+            i,
+            row["title"],
+            row["store"],
+            row["date_from"],
+            row["date_to"],
+            row["total_orders"],
+            row["total_products"],
+            row["status"],
+            row["updated_at"],
+        ])
+
+    ws.clear()
+    ws.update("A1", values)
+
+    requests_body = {"requests": []}
+    R = requests_body["requests"]
+
+    def cell_range(r1, c1, r2, c2):
+        return {"sheetId": ws.id, "startRowIndex": r1, "endRowIndex": r2,
+                "startColumnIndex": c1, "endColumnIndex": c2}
+
+    # 헤더 서식
+    R.append({"repeatCell": {
+        "range": cell_range(0, 0, 1, len(header)),
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": COLOR_TITLE_BG,
+            "textFormat": {"bold": True, "foregroundColor": COLOR_TITLE_FG},
+            "horizontalAlignment": "CENTER",
+        }},
+        "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+    }})
+
+    # 데이터 행 교대 색상 + 상태 열 색상
+    for i, row in enumerate(summary_rows):
+        row_idx = i + 1
+        bg = COLOR_ODD_BG if i % 2 == 0 else COLOR_EVEN_BG
+        R.append({"repeatCell": {
+            "range": cell_range(row_idx, 0, row_idx + 1, len(header)),
+            "cell": {"userEnteredFormat": {"backgroundColor": bg}},
+            "fields": "userEnteredFormat(backgroundColor)",
+        }})
+        status_bg = ({"red": 0.85, "green": 0.96, "blue": 0.85}
+                     if row["status"] == "진행중"
+                     else {"red": 0.90, "green": 0.90, "blue": 0.90})
+        R.append({"repeatCell": {
+            "range": cell_range(row_idx, 7, row_idx + 1, 8),
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": status_bg,
+                "horizontalAlignment": "CENTER",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,horizontalAlignment)",
+        }})
+
+    # 열 너비 자동 조정
+    R.append({"autoResizeDimensions": {"dimensions": {
+        "sheetId": ws.id, "dimension": "COLUMNS",
+        "startIndex": 0, "endIndex": len(header),
+    }}})
+
+    if R:
+        spreadsheet.batch_update(requests_body)
+
+
 def write_to_sheet(
     spreadsheet_url: str,
     product_title: str,
