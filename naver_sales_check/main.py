@@ -1,0 +1,321 @@
+"""
+네이버 스마트스토어 행사 매출증감 확인 프로그램
+이경하 담당 | 매일 오전 9시 자동 실행 (Google Cloud VM)
+
+시트 열 구조:
+  A: 번호  B: 스토어  C: 행사기간
+  D: 행사금액(전일까지)  E: 행사일평균
+  F: 비교일자(자동계산)  G: 비교금액  H: 비교일평균
+  I: 증감(D-G)
+"""
+
+import re
+import os
+import sys
+import time
+from pathlib import Path
+from datetime import datetime, timedelta, timezone, date
+
+from dotenv import load_dotenv
+import gspread
+from google.oauth2.service_account import Credentials
+import requests
+import bcrypt
+import base64
+
+BASE_DIR = Path(__file__).parent
+load_dotenv(BASE_DIR / ".env")
+
+SHEET_URL = os.getenv("SALES_CHECK_SHEET_URL")
+SCOPES = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive",
+]
+
+# 기존 influencer data shared 폴더의 credentials 공유 사용
+CREDENTIALS_PATH = str(
+    BASE_DIR.parent / "influencer data shared" / "credentials" / "google-credentials.json"
+)
+
+NAVER_BASE = "https://api.commerce.naver.com"
+
+# 스토어명 → (client_id, client_secret) 매핑
+STORE_MAP = {
+    "nutone":    (os.getenv("NUTONE_CLIENT_ID"),   os.getenv("NUTONE_CLIENT_SECRET")),
+    "뉴트원":    (os.getenv("NUTONE_CLIENT_ID"),   os.getenv("NUTONE_CLIENT_SECRET")),
+    "jdhealth":  (os.getenv("JDHEALTH_CLIENT_ID"), os.getenv("JDHEALTH_CLIENT_SECRET")),
+    "제이디":    (os.getenv("JDHEALTH_CLIENT_ID"), os.getenv("JDHEALTH_CLIENT_SECRET")),
+    "nutpet":    (os.getenv("NUTPET_CLIENT_ID"),   os.getenv("NUTPET_CLIENT_SECRET")),
+    "넛펫":      (os.getenv("NUTPET_CLIENT_ID"),   os.getenv("NUTPET_CLIENT_SECRET")),
+}
+
+# 정상 주문 상태 (취소/반품 제외)
+SALE_STATUSES = {"PAYED", "DELIVERING", "DELIVERED", "PURCHASE_DECIDED"}
+
+KST = timezone(timedelta(hours=9))
+
+
+# ── 구글 시트 ────────────────────────────────────────────
+
+def _get_gs_client():
+    creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+    return gspread.authorize(creds)
+
+
+def _extract_sheet_id(url: str) -> str:
+    m = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", url)
+    if not m:
+        raise ValueError(f"스프레드시트 URL에서 ID를 찾을 수 없습니다: {url}")
+    return m.group(1)
+
+
+# ── 네이버 커머스 API ────────────────────────────────────
+
+def _get_access_token(client_id: str, client_secret: str) -> str:
+    timestamp = str(int(time.time() * 1000))
+    password = f"{client_id}_{timestamp}"
+    hashed = bcrypt.hashpw(password.encode("utf-8"), client_secret.encode("utf-8"))
+    sign = base64.standard_b64encode(hashed).decode("utf-8")
+    resp = requests.post(
+        f"{NAVER_BASE}/external/v1/oauth2/token",
+        data={
+            "client_id": client_id,
+            "timestamp": timestamp,
+            "client_secret_sign": sign,
+            "grant_type": "client_credentials",
+            "type": "SELF",
+        },
+        timeout=30,
+    )
+    resp.raise_for_status()
+    return resp.json()["access_token"]
+
+
+def _query_orders_one_day(headers: dict, from_str: str, to_str: str) -> list:
+    """하루치 전체 주문 조회 (페이지네이션 처리)"""
+    all_items = []
+    page = 1
+    while True:
+        url = (
+            f"{NAVER_BASE}/external/v1/pay-order/seller/product-orders"
+            f"?from={from_str}&to={to_str}"
+            f"&rangeType=PAYED_DATETIME&pageSize=100&page={page}"
+        )
+        resp = requests.get(url, headers=headers, timeout=30)
+        if resp.status_code != 200:
+            print(f"  [API 오류] {resp.status_code}: {resp.text[:200]}")
+            break
+        data = resp.json().get("data", {})
+        contents = data.get("contents", [])
+        all_items.extend(contents)
+        if not data.get("pagination", {}).get("hasNext", False):
+            break
+        page += 1
+    return all_items
+
+
+def get_store_total_sales(client_id: str, client_secret: str,
+                          date_from: str, date_to: str) -> int:
+    """
+    기간 내 스토어 전체 결제금액 합산 (원).
+    date_from, date_to: "2026-04-06" 형식
+    date_to가 어제 이후이면 어제까지만 집계.
+    """
+    token = _get_access_token(client_id, client_secret)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    current = datetime.strptime(date_from, "%Y-%m-%d")
+    end_dt = datetime.strptime(date_to, "%Y-%m-%d")
+    yesterday = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
+    actual_end = min(end_dt, yesterday)
+
+    total = 0
+    while current <= actual_end:
+        next_day = current + timedelta(days=1)
+        from_str = current.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+        to_str = next_day.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+
+        items = _query_orders_one_day(headers, from_str, to_str)
+
+        day_total = 0
+        for item in items:
+            po = item.get("content", {}).get("productOrder", {})
+            if po.get("productOrderStatus", "") not in SALE_STATUSES:
+                continue
+            # totalPaymentAmount 우선, 없으면 quantity × unitPrice
+            amount = po.get("totalPaymentAmount") or po.get("paymentAmount")
+            if not amount:
+                amount = int(po.get("quantity") or 1) * int(po.get("unitPrice") or 0)
+            day_total += int(amount)
+
+        total += day_total
+        print(f"    {current.strftime('%m/%d')}: {day_total:,}원 ({len(items)}건)")
+        current = next_day
+
+    return total
+
+
+# ── 날짜 파싱 ────────────────────────────────────────────
+
+def parse_period(s: str):
+    """
+    "2026.4.28~5.19" 또는 "2026.4.28~2026.5.19" → (date, date)
+    구분자: ~ ～ - ～
+    """
+    s = s.strip().replace(" ", "")
+    parts = re.split(r"[~～]", s, maxsplit=1)
+    if len(parts) != 2:
+        raise ValueError(f"기간 구분자(~)를 찾을 수 없음: {s}")
+
+    def parse_one(token, ref_year, ref_month):
+        nums = re.split(r"[.\-/]", token.strip())
+        if len(nums) == 3:
+            return date(int(nums[0]), int(nums[1]), int(nums[2]))
+        if len(nums) == 2:
+            m, d = int(nums[0]), int(nums[1])
+            year = ref_year + (1 if m < ref_month else 0)
+            return date(year, m, d)
+        raise ValueError(f"날짜 파싱 실패: {token}")
+
+    start = parse_one(parts[0], 2026, 1)
+    end = parse_one(parts[1], start.year, start.month)
+    return start, end
+
+
+def fmt_period(d1: date, d2: date) -> str:
+    """date, date → "2026.4.6~4.27" """
+    if d1.year == d2.year:
+        if d1.month == d2.month:
+            return f"{d1.year}.{d1.month}.{d1.day}~{d2.day}"
+        return f"{d1.year}.{d1.month}.{d1.day}~{d2.month}.{d2.day}"
+    return f"{d1.year}.{d1.month}.{d1.day}~{d2.year}.{d2.month}.{d2.day}"
+
+
+# ── 메인 실행 ────────────────────────────────────────────
+
+def run_once():
+    now_str = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
+    print(f"\n{'='*55}")
+    print(f"  행사 매출증감 확인 | {now_str}")
+    print(f"{'='*55}")
+
+    if not SHEET_URL:
+        print("[오류] .env에 SALES_CHECK_SHEET_URL이 없습니다.")
+        return
+
+    gs = _get_gs_client()
+    sheet_id = _extract_sheet_id(SHEET_URL)
+    spreadsheet = gs.open_by_key(sheet_id)
+
+    gid_match = re.search(r"gid=(\d+)", SHEET_URL)
+    if gid_match:
+        gid = int(gid_match.group(1))
+        ws = next(s for s in spreadsheet.worksheets() if s.id == gid)
+    else:
+        ws = spreadsheet.sheet1
+
+    all_values = ws.get_all_values()
+    today = datetime.now(KST).date()
+    yesterday = today - timedelta(days=1)
+
+    batch_updates = []
+
+    for row_idx, row in enumerate(all_values):
+        if row_idx == 0:          # 헤더 행 스킵
+            continue
+        if len(row) < 3:
+            continue
+
+        store_raw  = str(row[1]).strip()  # B열
+        period_raw = str(row[2]).strip()  # C열
+
+        if not store_raw or not period_raw:
+            continue
+
+        # 스토어 API 키 찾기
+        creds_pair = STORE_MAP.get(store_raw.lower()) or STORE_MAP.get(store_raw)
+        if not creds_pair or not creds_pair[0]:
+            print(f"\n[행 {row_idx+1}] '{store_raw}' — API 키 없음, 스킵")
+            continue
+
+        client_id, client_secret = creds_pair
+
+        try:
+            promo_start, promo_end = parse_period(period_raw)
+        except Exception as e:
+            print(f"\n[행 {row_idx+1}] 기간 파싱 오류: {e}")
+            continue
+
+        if promo_start > today:
+            print(f"\n[행 {row_idx+1}] 행사 아직 시작 전 ({promo_start}) — 스킵")
+            continue
+
+        # 행사 기간 총 일수
+        promo_total_days = (promo_end - promo_start).days + 1
+
+        # 실제 집계 종료일 (전일 또는 행사종료일 중 이른 것)
+        promo_actual_end = min(promo_end, yesterday)
+        elapsed_days = (promo_actual_end - promo_start).days + 1
+
+        # 비교 기간: 행사시작 직전 동일 일수
+        comp_end   = promo_start - timedelta(days=1)
+        comp_start = comp_end - timedelta(days=promo_total_days - 1)
+
+        print(f"\n[행 {row_idx+1}] {store_raw}")
+        print(f"  행사: {promo_start}~{promo_end} ({promo_total_days}일)")
+        print(f"  집계: {promo_start}~{promo_actual_end} ({elapsed_days}일 경과)")
+        print(f"  비교: {comp_start}~{comp_end} ({promo_total_days}일)")
+
+        # 행사기간 매출 조회
+        print(f"  ▷ 행사기간 매출 조회 중...")
+        try:
+            promo_sales = get_store_total_sales(
+                client_id, client_secret,
+                promo_start.strftime("%Y-%m-%d"),
+                promo_actual_end.strftime("%Y-%m-%d"),
+            )
+        except Exception as e:
+            print(f"  [오류] 행사매출 조회 실패: {e}")
+            continue
+
+        promo_avg = round(promo_sales / elapsed_days) if elapsed_days > 0 else 0
+
+        # 비교기간 매출 조회
+        print(f"  ▷ 비교기간 매출 조회 중...")
+        try:
+            comp_sales = get_store_total_sales(
+                client_id, client_secret,
+                comp_start.strftime("%Y-%m-%d"),
+                comp_end.strftime("%Y-%m-%d"),
+            )
+        except Exception as e:
+            print(f"  [오류] 비교매출 조회 실패: {e}")
+            continue
+
+        comp_avg = round(comp_sales / promo_total_days) if promo_total_days > 0 else 0
+        diff = promo_sales - comp_sales
+        comp_period_str = fmt_period(comp_start, comp_end)
+
+        print(f"  행사매출: {promo_sales:,}원  일평균: {promo_avg:,}원")
+        print(f"  비교매출: {comp_sales:,}원   일평균: {comp_avg:,}원")
+        print(f"  증감:     {diff:+,}원")
+
+        # 시트 업데이트: D~I 열 (1-indexed row)
+        sheet_row = row_idx + 1
+        batch_updates.append({
+            "range": f"D{sheet_row}:I{sheet_row}",
+            "values": [[promo_sales, promo_avg, comp_period_str,
+                        comp_sales, comp_avg, diff]],
+        })
+
+    if batch_updates:
+        ws.batch_update(batch_updates)
+        print(f"\n✅ {len(batch_updates)}개 행 시트 업데이트 완료")
+    else:
+        print("\n업데이트할 행이 없습니다.")
+
+    print(f"{'='*55}\n")
+
+
+if __name__ == "__main__":
+    run_once()

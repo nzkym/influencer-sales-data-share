@@ -2,10 +2,12 @@
 influencer data shared/.env
 influencer data shared/credentials/
 patent name find/.env
+naver_sales_check/.env
 
 # Python 가상환경 및 캐시
 influencer data shared/.venv/
 patent name find/.venv/
+naver_sales_check/.venv/
 **/__pycache__/
 *.pyc
 

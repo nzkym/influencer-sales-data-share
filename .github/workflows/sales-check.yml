@@ -1,0 +1,54 @@
+name: 행사 매출증감 확인 (매일 오전 9시)
+
+on:
+  schedule:
+    - cron: '0 0 * * *'   # 매일 00:00 UTC = 09:00 KST
+  workflow_dispatch:        # GitHub 웹에서 수동 실행 가능
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: 'naver_sales_check/requirements.txt'
+
+      - name: 패키지 설치
+        run: pip install -r "naver_sales_check/requirements.txt"
+
+      - name: 구글 서비스 계정 키 파일 생성
+        run: |
+          mkdir -p "influencer data shared/credentials"
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > "influencer data shared/credentials/google-credentials.json"
+
+      - name: .env 파일 생성
+        env:
+          SALES_CHECK_SHEET_URL: ${{ secrets.SALES_CHECK_SHEET_URL }}
+          NUTONE_CLIENT_ID: ${{ secrets.NUTONE_CLIENT_ID }}
+          NUTONE_CLIENT_SECRET: ${{ secrets.NUTONE_CLIENT_SECRET }}
+          JDHEALTH_CLIENT_ID: ${{ secrets.JDHEALTH_CLIENT_ID }}
+          JDHEALTH_CLIENT_SECRET: ${{ secrets.JDHEALTH_CLIENT_SECRET }}
+          NUTPET_CLIENT_ID: ${{ secrets.NUTPET_CLIENT_ID }}
+          NUTPET_CLIENT_SECRET: ${{ secrets.NUTPET_CLIENT_SECRET }}
+        run: |
+          {
+            echo "SALES_CHECK_SHEET_URL=$SALES_CHECK_SHEET_URL"
+            echo "NUTONE_CLIENT_ID=$NUTONE_CLIENT_ID"
+            echo "NUTONE_CLIENT_SECRET=$NUTONE_CLIENT_SECRET"
+            echo "JDHEALTH_CLIENT_ID=$JDHEALTH_CLIENT_ID"
+            echo "JDHEALTH_CLIENT_SECRET=$JDHEALTH_CLIENT_SECRET"
+            echo "NUTPET_CLIENT_ID=$NUTPET_CLIENT_ID"
+            echo "NUTPET_CLIENT_SECRET=$NUTPET_CLIENT_SECRET"
+          } > "naver_sales_check/.env"
+
+      - name: 행사 매출증감 확인 실행
+        run: |
+          cd "naver_sales_check"
+          python main.py
