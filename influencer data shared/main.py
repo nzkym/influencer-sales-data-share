@@ -270,12 +270,15 @@ def update_summary_tab():
     # 이미 탭에 있는 제목 목록
     existing = sheets.read_summary_tab(MASTER_SHEET_URL)
 
-    # 탭에 없거나 product_name/url이 비어있는 캠페인 재조회
+    # 처리 대상:
+    # 1) 종료됐고 탭에 없는 신규 캠페인
+    # 2) 탭에 이미 있지만 product_name/url이 빈 캠페인 (진행중 포함)
     new_campaigns = [
-        c for c in ended
-        if c["title"] not in existing
-        or not existing[c["title"]].get("product_name")
-        or not existing[c["title"]].get("url")
+        c for c in all_campaigns
+        if (c["is_ended"] and c["title"] not in existing)
+        or (c["title"] in existing
+            and (not existing[c["title"]].get("product_name")
+                 or not existing[c["title"]].get("url")))
     ]
     if not new_campaigns:
         return
