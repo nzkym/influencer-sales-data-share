@@ -287,17 +287,17 @@ def update_summary_tab():
 
     new_rows = []
     for campaign in new_campaigns:
+        clean_url = campaign["url"].split("?")[0]
         try:
-            total_orders, total_products, product_name = sheets.read_totals_from_sheet(
-                campaign["sheet_url"]
-            )
+            total_orders, total_products, _ = sheets.read_totals_from_sheet(campaign["sheet_url"])
         except Exception:
-            total_orders, total_products, product_name = "-", "-", ""
+            total_orders, total_products = "-", "-"
+        product_name = naver_api.get_product_name_from_url(clean_url)
 
         new_rows.append({
             "title":          campaign["title"],
             "product_name":   product_name,
-            "url":            campaign["url"],
+            "url":            clean_url,
             "store":          campaign["store"],
             "date_from":      campaign["date_from"],
             "date_to":        campaign["date_to"],
@@ -307,9 +307,19 @@ def update_summary_tab():
             "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
         })
 
-    # 재조회된 건으로 기존 데이터 덮어쓰기 후 종료일 내림차순 정렬
+    # 재조회된 건으로 기존 데이터 덮어쓰기
     new_titles = {r["title"] for r in new_rows}
     kept_rows = [r for r in existing.values() if r["title"] not in new_titles]
+
+    # 기존 행 상태 빈칸: 종료일 기준으로 자동 설정
+    today_str = datetime.now(KST).date().strftime("%Y-%m-%d")
+    for r in kept_rows:
+        if not r.get("status"):
+            r["status"] = "완료" if str(r.get("date_to", "")) < today_str else "진행중"
+        # URL 쿼리파라미터 제거
+        if r.get("url"):
+            r["url"] = r["url"].split("?")[0]
+
     all_rows = new_rows + kept_rows
     all_rows.sort(key=lambda r: str(r.get("date_to", "")), reverse=True)
 

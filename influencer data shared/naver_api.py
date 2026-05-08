@@ -14,6 +14,26 @@ from datetime import datetime, timedelta
 
 BASE_URL = "https://api.commerce.naver.com"
 
+
+def get_product_name_from_url(url: str) -> str:
+    """네이버 상품 URL에서 og:title로 상품명 추출."""
+    try:
+        clean_url = url.split("?")[0]
+        resp = requests.get(
+            clean_url,
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            timeout=10,
+        )
+        match = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', resp.text)
+        if match:
+            return match.group(1).strip()
+        match = re.search(r'<title>(.*?)(?:\s*[:\|]\s*네이버.*)?</title>', resp.text)
+        if match:
+            return match.group(1).strip()
+    except Exception:
+        pass
+    return ""
+
 # 실제 판매로 집계할 주문 상태 (취소/반품 제외)
 SALE_STATUSES = {"PAYED", "DELIVERING", "DELIVERED", "PURCHASE_DECIDED"}
 
