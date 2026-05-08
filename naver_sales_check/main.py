@@ -168,29 +168,15 @@ def get_store_total_sales(client_id: str, client_secret: str,
 
 # ── 날짜 파싱 ────────────────────────────────────────────
 
-def parse_period(s: str):
+def parse_date(s: str) -> date:
     """
-    "2026.4.28~5.19" 또는 "2026.4.28~2026.5.19" → (date, date)
-    구분자: ~ ～ - ～
+    "2026.4.28" 또는 "2026-04-28" 형식 → date
     """
     s = s.strip().replace(" ", "")
-    parts = re.split(r"[~～]", s, maxsplit=1)
-    if len(parts) != 2:
-        raise ValueError(f"기간 구분자(~)를 찾을 수 없음: {s}")
-
-    def parse_one(token, ref_year, ref_month):
-        nums = re.split(r"[.\-/]", token.strip())
-        if len(nums) == 3:
-            return date(int(nums[0]), int(nums[1]), int(nums[2]))
-        if len(nums) == 2:
-            m, d = int(nums[0]), int(nums[1])
-            year = ref_year + (1 if m < ref_month else 0)
-            return date(year, m, d)
-        raise ValueError(f"날짜 파싱 실패: {token}")
-
-    start = parse_one(parts[0], 2026, 1)
-    end = parse_one(parts[1], start.year, start.month)
-    return start, end
+    nums = re.split(r"[.\-/]", s)
+    if len(nums) == 3:
+        return date(int(nums[0]), int(nums[1]), int(nums[2]))
+    raise ValueError(f"날짜 파싱 실패: {s}")
 
 
 def fmt_period(d1: date, d2: date) -> str:
@@ -229,18 +215,28 @@ def run_once():
     today = datetime.now(KST).date()
     yesterday = today - timedelta(days=1)
 
+    # 실제 시트 열 구조:
+    # A(0)=제목  B(1)=행사시작일  C(2)=행사종료일
+    # D(3)~I(8) = 프로그램 자동 기입
+    # J(9)=채널(nutone/jdhealth/nutpet)
+
     batch_updates = []
+    first_data_row = True  # 첫 번째 데이터 행에서만 디버그 출력
 
     for row_idx, row in enumerate(all_values):
         if row_idx == 0:          # 헤더 행 스킵
             continue
-        if len(row) < 3:
+
+        # 최소 10열 필요 (J열까지)
+        if len(row) < 10:
             continue
 
-        store_raw  = str(row[1]).strip()  # B열
-        period_raw = str(row[2]).strip()  # C열
+        title      = str(row[0]).strip()   # A: 제목
+        start_raw  = str(row[1]).strip()   # B: 행사시작일
+        end_raw    = str(row[2]).strip()   # C: 행사종료일
+        store_raw  = str(row[9]).strip()   # J: 채널
 
-        if not store_raw or not period_raw:
+        if not title or not start_raw or not end_raw or not store_raw:
             continue
 
         # 스토어 API 키 찾기
@@ -252,9 +248,10 @@ def run_once():
         client_id, client_secret = creds_pair
 
         try:
-            promo_start, promo_end = parse_period(period_raw)
+            promo_start = parse_date(start_raw)
+            promo_end   = parse_date(end_raw)
         except Exception as e:
-            print(f"\n[행 {row_idx+1}] 기간 파싱 오류: {e}")
+            print(f"\n[행 {row_idx+1}] 날짜 파싱 오류: {e}")
             continue
 
         if promo_start > today:
@@ -272,28 +269,25 @@ def run_once():
         comp_end   = promo_start - timedelta(days=1)
         comp_start = comp_end - timedelta(days=promo_total_days - 1)
 
-        print(f"\n[행 {row_idx+1}] {store_raw}")
+        print(f"\n[행 {row_idx+1}] {title} ({store_raw})")
         print(f"  행사: {promo_start}~{promo_end} ({promo_total_days}일)")
         print(f"  집계: {promo_start}~{promo_actual_end} ({elapsed_days}일 경과)")
         print(f"  비교: {comp_start}~{comp_end} ({promo_total_days}일)")
 
-        # 행사기간 매출 조회 (첫 번째 행에서만 디버그 출력)
+        # 행사기간 매출 조회
         print(f"  ▷ 행사기간 매출 조회 중...")
-        is_first_row = (row_idx == next(
-            (i for i, r in enumerate(all_values) if i > 0 and len(r) >= 3
-             and r[1].strip() and r[2].strip()), 1
-        ))
         try:
             promo_sales = get_store_total_sales(
                 client_id, client_secret,
                 promo_start.strftime("%Y-%m-%d"),
                 promo_actual_end.strftime("%Y-%m-%d"),
-                debug_first=is_first_row,
+                debug_first=first_data_row,
             )
         except Exception as e:
             print(f"  [오류] 행사매출 조회 실패: {e}")
             continue
 
+        first_data_row = False
         promo_avg = round(promo_sales / elapsed_days) if elapsed_days > 0 else 0
 
         # 비교기간 매출 조회
