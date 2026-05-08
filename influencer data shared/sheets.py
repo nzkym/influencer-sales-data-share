@@ -106,6 +106,31 @@ def _daily_totals(aggregated: list) -> list:
     ]
 
 
+def read_totals_from_sheet(sheet_url: str) -> tuple:
+    """인플루언서 개별 시트에서 총 주문수·제품수·제품명 읽기.
+    반환: (total_orders, total_products, product_name)
+    """
+    if not sheet_url:
+        raise ValueError("sheet_url 없음")
+    client = _get_client()
+    sheet_id = _extract_sheet_id(sheet_url)
+    spreadsheet = client.open_by_key(sheet_id)
+    ws = spreadsheet.sheet1
+
+    # 행1: 제품명 (A1)
+    product_name = str(ws.acell("A1").value or "").replace("📊", "").strip()
+
+    # 행3: "총 주문수: N건  |  총 제품수: M개" (A3)
+    summary_cell = str(ws.acell("A3").value or "")
+    orders_match = re.search(r"총 주문수:\s*([\d,]+)건", summary_cell)
+    products_match = re.search(r"총 제품수:\s*([\d,]+)개", summary_cell)
+
+    total_orders = int(orders_match.group(1).replace(",", "")) if orders_match else 0
+    total_products = int(products_match.group(1).replace(",", "")) if products_match else 0
+
+    return total_orders, total_products, product_name
+
+
 def read_summary_tab(spreadsheet_url: str) -> dict:
     """'캠페인 실적' 탭 읽기. 반환: {제목: row_dict}"""
     try:

@@ -230,10 +230,12 @@ def load_all_campaigns() -> list:
             if start_date > today:
                 continue
 
+            sheet_url = str(row.get("데이터공유 구글스프레드_인플루언서전달링크") or "").strip()
             campaigns.append({
                 "title":      title,
                 "product_no": extract_product_no(url),
                 "url":        url,
+                "sheet_url":  sheet_url,
                 "date_from":  start_date.strftime("%Y-%m-%d"),
                 "date_to":    end_date.strftime("%Y-%m-%d"),
                 "api_id":     api_id,
@@ -283,17 +285,11 @@ def update_summary_tab():
     new_rows = []
     for campaign in new_campaigns:
         try:
-            sales, product_name = naver_api.get_sales_data(
-                client_id=campaign["api_id"],
-                client_secret=campaign["api_secret"],
-                product_no=campaign["product_no"],
-                date_from=campaign["date_from"],
-                date_to=campaign["date_to"],
+            total_orders, total_products, product_name = sheets.read_totals_from_sheet(
+                campaign["sheet_url"]
             )
-            total_orders, total_products = _calc_totals(sales)
         except Exception:
-            sales, product_name = [], ""
-            total_orders, total_products = "-", "-"
+            total_orders, total_products, product_name = "-", "-", ""
 
         new_rows.append({
             "title":          campaign["title"],
