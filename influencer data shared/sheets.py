@@ -219,11 +219,15 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
             "fields": "userEnteredFormat(backgroundColor)",
         }})
 
-    # 열 너비 자동 조정
-    R.append({"autoResizeDimensions": {"dimensions": {
-        "sheetId": ws.id, "dimension": "COLUMNS",
-        "startIndex": 0, "endIndex": len(header),
-    }}})
+    # 열 너비 고정 (No/제목/제품명/스토어/시작일/종료일/주문수/제품수/상태/진행링크/업데이트)
+    col_widths = [40, 100, 260, 65, 85, 85, 55, 55, 55, 200, 110]
+    for idx, width in enumerate(col_widths):
+        R.append({"updateDimensionProperties": {
+            "range": {"sheetId": ws.id, "dimension": "COLUMNS",
+                      "startIndex": idx, "endIndex": idx + 1},
+            "properties": {"pixelSize": width},
+            "fields": "pixelSize",
+        }})
 
     if R:
         spreadsheet.batch_update(requests_body)

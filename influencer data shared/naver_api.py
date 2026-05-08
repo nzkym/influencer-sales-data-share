@@ -15,21 +15,21 @@ from datetime import datetime, timedelta
 BASE_URL = "https://api.commerce.naver.com"
 
 
-def get_product_name_from_url(url: str) -> str:
-    """네이버 상품 URL에서 og:title로 상품명 추출."""
+def get_product_name(client_id: str, client_secret: str, product_no: str) -> str:
+    """네이버 커머스 API로 상품명 조회."""
     try:
-        clean_url = url.split("?")[0]
+        token = _get_access_token(client_id, client_secret)
+        headers = {"Authorization": f"Bearer {token}"}
         resp = requests.get(
-            clean_url,
-            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
+            f"{BASE_URL}/external/v1/products/channel-products/{product_no}",
+            headers=headers,
             timeout=10,
         )
-        match = re.search(r'<meta[^>]+property=["\']og:title["\'][^>]+content=["\'](.*?)["\']', resp.text)
-        if match:
-            return match.group(1).strip()
-        match = re.search(r'<title>(.*?)(?:\s*[:\|]\s*네이버.*)?</title>', resp.text)
-        if match:
-            return match.group(1).strip()
+        if resp.ok:
+            data = resp.json()
+            return (data.get("channelProductName")
+                    or data.get("name")
+                    or data.get("originProductName") or "")
     except Exception:
         pass
     return ""

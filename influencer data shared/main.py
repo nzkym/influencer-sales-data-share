@@ -297,7 +297,9 @@ def update_summary_tab():
                 total_orders, total_products, _ = sheets.read_totals_from_sheet(campaign["sheet_url"])
             except Exception:
                 total_orders, total_products = "-", "-"
-            product_name = naver_api.get_product_name_from_url(clean_url)
+            product_name = naver_api.get_product_name(
+                campaign["api_id"], campaign["api_secret"], campaign["product_no"]
+            )
 
             new_rows.append({
                 "title":          campaign["title"],
