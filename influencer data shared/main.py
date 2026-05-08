@@ -293,7 +293,8 @@ def update_summary_tab():
         print(f"\n  [실적 집계] 캠페인 {len(fetch_campaigns)}개 처리 중...")
         for campaign in fetch_campaigns:
             clean_url = campaign["url"].split("?")[0]
-            # 주문 상세에서 product_name 추출 (3~7열과 동일한 방식)
+            clean_url = campaign["url"].split("?")[0]
+            # 주문 상세에서 product_name 추출
             try:
                 sales, product_name = naver_api.get_sales_data(
                     client_id=campaign["api_id"],
@@ -304,6 +305,11 @@ def update_summary_tab():
                 )
             except Exception:
                 sales, product_name = [], ""
+            # 주문 0건이면 상품 API로 폴백
+            if not product_name:
+                product_name = naver_api.get_product_name(
+                    campaign["api_id"], campaign["api_secret"], campaign["product_no"]
+                )
             # 합계는 개별 시트에서 읽기 (정확도 우선)
             try:
                 total_orders, total_products, _ = sheets.read_totals_from_sheet(campaign["sheet_url"])

@@ -27,11 +27,15 @@ def get_product_name(client_id: str, client_secret: str, product_no: str) -> str
         )
         if resp.ok:
             data = resp.json()
+            print(f"  [상품API] 응답 키: {list(data.keys())}")
             return (data.get("channelProductName")
                     or data.get("name")
-                    or data.get("originProductName") or "")
-    except Exception:
-        pass
+                    or data.get("originProductName")
+                    or data.get("productName") or "")
+        else:
+            print(f"  [상품API] 실패: {resp.status_code} {resp.text[:100]}")
+    except Exception as e:
+        print(f"  [상품API] 오류: {e}")
     return ""
 
 # 실제 판매로 집계할 주문 상태 (취소/반품 제외)
