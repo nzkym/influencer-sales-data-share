@@ -311,7 +311,7 @@ def update_summary_tab():
     new_titles = {r["title"] for r in new_rows}
     kept_rows = [r for r in existing.values() if r["title"] not in new_titles]
     all_rows = new_rows + kept_rows
-    all_rows.sort(key=lambda r: r["date_to"], reverse=True)
+    all_rows.sort(key=lambda r: str(r.get("date_to", "")), reverse=True)
 
     sheets.write_summary_tab(MASTER_SHEET_URL, all_rows)
     print(f"  → 캠페인 실적 탭 업데이트 완료 (+{len(new_rows)}건)\n")
