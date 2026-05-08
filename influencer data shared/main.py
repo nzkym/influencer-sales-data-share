@@ -260,25 +260,27 @@ def _calc_totals(sales_data: list) -> tuple:
 
 
 def update_summary_tab():
-    """마스터 시트의 '캠페인 실적' 탭 업데이트."""
+    """마스터 시트의 '캠페인 실적' 탭에 새로 종료된 캠페인만 추가."""
     KST = timezone(timedelta(hours=9))
     all_campaigns = load_all_campaigns()
-    if not all_campaigns:
+
+    # 종료된 캠페인만
+    ended = [c for c in all_campaigns if c["is_ended"]]
+    if not ended:
         return
 
+    # 이미 탭에 있는 제목 목록
     existing = sheets.read_summary_tab(MASTER_SHEET_URL)
-    print(f"\n  [실적 집계] 캠페인 {len(all_campaigns)}개 처리 중...")
 
-    summary_rows = []
-    for campaign in all_campaigns:
-        title    = campaign["title"]
-        is_ended = campaign["is_ended"]
+    # 아직 탭에 없는 새 종료 캠페인만
+    new_campaigns = [c for c in ended if c["title"] not in existing]
+    if not new_campaigns:
+        return
 
-        # 종료된 캠페인이 이미 실적 탭에 있으면 재조회 생략
-        if is_ended and title in existing:
-            summary_rows.append(existing[title])
-            continue
+    print(f"\n  [실적 집계] 새 종료 캠페인 {len(new_campaigns)}개 추가 중...")
 
+    new_rows = []
+    for campaign in new_campaigns:
         try:
             sales = naver_api.get_sales_data(
                 client_id=campaign["api_id"],
@@ -289,31 +291,24 @@ def update_summary_tab():
             )
             total_orders, total_products = _calc_totals(sales)
         except Exception:
-            if title in existing:
-                summary_rows.append(existing[title])
-            else:
-                summary_rows.append({
-                    "title": title, "store": campaign["store"],
-                    "date_from": campaign["date_from"], "date_to": campaign["date_to"],
-                    "total_orders": "-", "total_products": "-",
-                    "status": "완료" if is_ended else "진행중",
-                    "updated_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
-                })
-            continue
+            total_orders, total_products = "-", "-"
 
-        summary_rows.append({
-            "title":          title,
+        new_rows.append({
+            "title":          campaign["title"],
             "store":          campaign["store"],
             "date_from":      campaign["date_from"],
             "date_to":        campaign["date_to"],
             "total_orders":   total_orders,
             "total_products": total_products,
-            "status":         "완료" if is_ended else "진행중",
             "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
         })
 
-    sheets.write_summary_tab(MASTER_SHEET_URL, summary_rows)
-    print(f"  → 캠페인 실적 탭 업데이트 완료 ({len(summary_rows)}건)\n")
+    # 종료일 내림차순 정렬 후 기존 데이터 위에 추가
+    new_rows.sort(key=lambda r: r["date_to"], reverse=True)
+    all_rows = new_rows + list(existing.values())
+
+    sheets.write_summary_tab(MASTER_SHEET_URL, all_rows)
+    print(f"  → 캠페인 실적 탭 업데이트 완료 (+{len(new_rows)}건)\n")
 
 
 # ── 메인 실행 ────────────────────────────────────────────

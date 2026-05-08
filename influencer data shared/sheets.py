@@ -144,7 +144,7 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=10)
 
-    header = ["No", "제목", "스토어", "시작일", "종료일", "주문수", "제품수", "상태", "업데이트"]
+    header = ["No", "제목", "스토어", "시작일", "종료일", "주문수", "제품수", "업데이트"]
     values = [header]
     for i, row in enumerate(summary_rows, 1):
         values.append([
@@ -155,7 +155,6 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
             row["date_to"],
             row["total_orders"],
             row["total_products"],
-            row["status"],
             row["updated_at"],
         ])
 
@@ -180,25 +179,14 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
         "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
     }})
 
-    # 데이터 행 교대 색상 + 상태 열 색상
-    for i, row in enumerate(summary_rows):
+    # 데이터 행 교대 색상
+    for i in range(len(summary_rows)):
         row_idx = i + 1
         bg = COLOR_ODD_BG if i % 2 == 0 else COLOR_EVEN_BG
         R.append({"repeatCell": {
             "range": cell_range(row_idx, 0, row_idx + 1, len(header)),
             "cell": {"userEnteredFormat": {"backgroundColor": bg}},
             "fields": "userEnteredFormat(backgroundColor)",
-        }})
-        status_bg = ({"red": 0.85, "green": 0.96, "blue": 0.85}
-                     if row["status"] == "진행중"
-                     else {"red": 0.90, "green": 0.90, "blue": 0.90})
-        R.append({"repeatCell": {
-            "range": cell_range(row_idx, 7, row_idx + 1, 8),
-            "cell": {"userEnteredFormat": {
-                "backgroundColor": status_bg,
-                "horizontalAlignment": "CENTER",
-            }},
-            "fields": "userEnteredFormat(backgroundColor,horizontalAlignment)",
         }})
 
     # 열 너비 자동 조정
