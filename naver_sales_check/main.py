@@ -108,8 +108,7 @@ def _query_orders_one_day(headers: dict, from_str: str, to_str: str) -> list:
     return all_items
 
 
-def get_period_sales(headers: dict, date_from: str, date_to: str,
-                     debug_first: bool = False) -> int:
+def get_period_sales(headers: dict, date_from: str, date_to: str) -> int:
     """
     이미 발급된 headers로 기간 매출 합산.
     date_from~date_to가 어제 이후면 어제까지만 집계.
@@ -134,12 +133,6 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
             po = item.get("content", {}).get("productOrder", {})
             if po.get("productOrderStatus", "") not in SALE_STATUSES:
                 continue
-
-            if debug_first and not first_logged:
-                print(f"    [디버그] productOrder 필드: {list(po.keys())}")
-                print(f"    [디버그] totalPaymentAmount={po.get('totalPaymentAmount')}, "
-                      f"unitPrice={po.get('unitPrice')}, quantity={po.get('quantity')}")
-                first_logged = True
 
             amount = po.get("totalPaymentAmount") or po.get("paymentAmount")
             if not amount:
@@ -199,8 +192,6 @@ def run_once():
     yesterday = today - timedelta(days=1)
 
     batch_updates = []
-    first_data_row = True
-
     for row_idx, row in enumerate(all_values):
         if row_idx == 0:
             continue
@@ -268,9 +259,7 @@ def run_once():
                 headers,
                 promo_start.strftime("%Y-%m-%d"),
                 promo_actual_end.strftime("%Y-%m-%d"),
-                debug_first=first_data_row,
             )
-            first_data_row = False
         except Exception as e:
             print(f"  [오류] 행사매출 조회 실패: {e}")
             batch_updates.append({"range": f"F{sheet_row}", "values": [[comp_period_str]]})
