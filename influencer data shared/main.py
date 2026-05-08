@@ -268,12 +268,17 @@ def update_summary_tab():
     # 이미 탭에 있는 제목 목록
     existing = sheets.read_summary_tab(MASTER_SHEET_URL)
 
-    # 아직 탭에 없는 새 종료 캠페인만
-    new_campaigns = [c for c in ended if c["title"] not in existing]
+    # 탭에 없거나 product_name/url이 비어있는 캠페인 재조회
+    new_campaigns = [
+        c for c in ended
+        if c["title"] not in existing
+        or not existing[c["title"]].get("product_name")
+        or not existing[c["title"]].get("url")
+    ]
     if not new_campaigns:
         return
 
-    print(f"\n  [실적 집계] 새 종료 캠페인 {len(new_campaigns)}개 추가 중...")
+    print(f"\n  [실적 집계] 캠페인 {len(new_campaigns)}개 처리 중...")
 
     new_rows = []
     for campaign in new_campaigns:
@@ -302,9 +307,11 @@ def update_summary_tab():
             "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
         })
 
-    # 종료일 내림차순 정렬 후 기존 데이터 위에 추가
-    new_rows.sort(key=lambda r: r["date_to"], reverse=True)
-    all_rows = new_rows + list(existing.values())
+    # 재조회된 건으로 기존 데이터 덮어쓰기 후 종료일 내림차순 정렬
+    new_titles = {r["title"] for r in new_rows}
+    kept_rows = [r for r in existing.values() if r["title"] not in new_titles]
+    all_rows = new_rows + kept_rows
+    all_rows.sort(key=lambda r: r["date_to"], reverse=True)
 
     sheets.write_summary_tab(MASTER_SHEET_URL, all_rows)
     print(f"  → 캠페인 실적 탭 업데이트 완료 (+{len(new_rows)}건)\n")
