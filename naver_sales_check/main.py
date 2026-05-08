@@ -122,7 +122,16 @@ def _query_orders_one_day(headers: dict, from_str: str, to_str: str) -> list:
             f"?from={from_str}&to={to_str}"
             f"&rangeType=PAYED_DATETIME&pageSize=100&page={page}"
         )
-        resp = requests.get(url, headers=headers, timeout=30)
+        # 429 Rate Limit 시 최대 3회 재시도
+        for attempt in range(3):
+            resp = requests.get(url, headers=headers, timeout=30)
+            if resp.status_code == 429:
+                wait = 3 + attempt * 2   # 3초, 5초, 7초
+                print(f"    [Rate Limit] {wait}초 후 재시도...")
+                time.sleep(wait)
+                continue
+            break
+
         if resp.status_code != 200:
             print(f"    [API 오류] {resp.status_code}: {resp.text[:100]}")
             break
@@ -135,7 +144,7 @@ def _query_orders_one_day(headers: dict, from_str: str, to_str: str) -> list:
 
 
 def get_period_sales(headers: dict, date_from: str, date_to: str,
-                     product_no: str = None, workers: int = 5) -> int:
+                     product_no: str = None, workers: int = 2) -> int:
     """
     기간 매출 합산. 병렬 조회로 속도 개선.
     product_no 지정 시 해당 상품만 합산 (공구 공제용).
