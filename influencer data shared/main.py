@@ -231,8 +231,9 @@ def load_all_campaigns() -> list:
                 continue
 
             campaigns.append({
-                "title":     title,
+                "title":      title,
                 "product_no": extract_product_no(url),
+                "url":        url,
                 "date_from":  start_date.strftime("%Y-%m-%d"),
                 "date_to":    end_date.strftime("%Y-%m-%d"),
                 "api_id":     api_id,
@@ -247,15 +248,10 @@ def load_all_campaigns() -> list:
 
 
 def _calc_totals(sales_data: list) -> tuple:
-    """판매 데이터에서 총 주문수, 총 제품수 계산."""
-    total_orders = 0
-    total_products = 0
-    for s in sales_data:
-        qty = s["quantity"]
-        match = re.search(r'(\d+)\s*BOX', s.get("option", ""), re.IGNORECASE)
-        box = int(match.group(1)) if match else 1
-        total_orders += qty
-        total_products += qty * box
+    """판매 데이터에서 총 주문수, 총 제품수 계산 (개별 시트와 동일 방식)."""
+    aggregated = sheets._aggregate(sales_data)
+    total_orders = sum(r["daily_orders"] for r in aggregated)
+    total_products = sum(r["daily_products"] for r in aggregated)
     return total_orders, total_products
 
 
@@ -282,7 +278,7 @@ def update_summary_tab():
     new_rows = []
     for campaign in new_campaigns:
         try:
-            sales = naver_api.get_sales_data(
+            sales, product_name = naver_api.get_sales_data(
                 client_id=campaign["api_id"],
                 client_secret=campaign["api_secret"],
                 product_no=campaign["product_no"],
@@ -291,10 +287,13 @@ def update_summary_tab():
             )
             total_orders, total_products = _calc_totals(sales)
         except Exception:
+            sales, product_name = [], ""
             total_orders, total_products = "-", "-"
 
         new_rows.append({
             "title":          campaign["title"],
+            "product_name":   product_name,
+            "url":            campaign["url"],
             "store":          campaign["store"],
             "date_from":      campaign["date_from"],
             "date_to":        campaign["date_to"],
@@ -335,7 +334,7 @@ def run_once():
     for i, campaign in enumerate(campaigns, 1):
         print(f"[{i}/{len(campaigns)}] {campaign['title'][:45]}")
         try:
-            sales = naver_api.get_sales_data(
+            sales, _ = naver_api.get_sales_data(
                 client_id=campaign["api_id"],
                 client_secret=campaign["api_secret"],
                 product_no=campaign["product_no"],

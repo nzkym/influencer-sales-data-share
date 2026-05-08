@@ -120,12 +120,13 @@ def read_summary_tab(spreadsheet_url: str) -> dict:
             if title:
                 result[title] = {
                     "title":          title,
+                    "product_name":   str(row.get("제품명", "")),
+                    "url":            str(row.get("진행링크", "")),
                     "store":          str(row.get("스토어", "")),
                     "date_from":      str(row.get("시작일", "")),
                     "date_to":        str(row.get("종료일", "")),
                     "total_orders":   row.get("주문수", 0),
                     "total_products": row.get("제품수", 0),
-                    "status":         str(row.get("상태", "")),
                     "updated_at":     str(row.get("업데이트", "")),
                 }
         return result
@@ -144,17 +145,19 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=10)
 
-    header = ["No", "제목", "스토어", "시작일", "종료일", "주문수", "제품수", "업데이트"]
+    header = ["No", "제목", "제품명", "스토어", "시작일", "종료일", "주문수", "제품수", "진행링크", "업데이트"]
     values = [header]
     for i, row in enumerate(summary_rows, 1):
         values.append([
             i,
             row["title"],
+            row.get("product_name", ""),
             row["store"],
             row["date_from"],
             row["date_to"],
             row["total_orders"],
             row["total_products"],
+            row.get("url", ""),
             row["updated_at"],
         ])
 

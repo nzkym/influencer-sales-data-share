@@ -64,10 +64,10 @@ def _query_one_day(headers: dict, from_str: str, to_str: str) -> list:
     return all_items
 
 
-def _get_option_names(headers: dict, order_ids: list) -> dict:
-    """productOrderIds 배열로 옵션명 조회 (query 엔드포인트)"""
+def _get_option_names(headers: dict, order_ids: list) -> tuple:
+    """productOrderIds 배열로 옵션명 + 상품명 조회. 반환: (option_map, product_name)"""
     if not order_ids:
-        return {}
+        return {}, ""
     resp = requests.post(
         f"{BASE_URL}/external/v1/pay-order/seller/product-orders/query",
         headers={**headers, "Content-Type": "application/json"},
@@ -75,14 +75,17 @@ def _get_option_names(headers: dict, order_ids: list) -> dict:
         timeout=30,
     )
     if resp.status_code != 200:
-        return {}
+        return {}, ""
     result = {}
+    product_name = ""
     for order in resp.json().get("data", []):
         po = order.get("productOrder", {})
         oid = str(po.get("productOrderId", ""))
         option = po.get("productOption") or ""
         result[oid] = option
-    return result
+        if not product_name:
+            product_name = po.get("productName") or ""
+    return result, product_name
 
 
 def get_sales_data(
@@ -106,6 +109,7 @@ def get_sales_data(
     today = datetime.now()
 
     result = []
+    product_name = ""
     while current <= min(end, today):
         next_day = current + timedelta(days=1)
         from_str = current.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
@@ -130,9 +134,11 @@ def get_sales_data(
                 "quantity": int(po.get("quantity") or 1),
             })
 
-        # 3단계: query 엔드포인트로 옵션명 보완
+        # 3단계: query 엔드포인트로 옵션명 + 상품명 보완
         order_ids = [m["order_id"] for m in matched]
-        option_map = _get_option_names(headers, order_ids)
+        option_map, pname = _get_option_names(headers, order_ids)
+        if pname and not product_name:
+            product_name = pname
 
         for m in matched:
             option = option_map.get(m["order_id"]) or "기본 옵션"
@@ -146,4 +152,4 @@ def get_sales_data(
         current = next_day
 
     print(f"  → 합계 {len(result)}건 수집 완료")
-    return result
+    return result, product_name
