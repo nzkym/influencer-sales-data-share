@@ -227,14 +227,14 @@ def load_gugu_campaigns(store: str) -> list:
     return campaigns
 
 
-def calc_gugu_deduction(headers: dict, store: str,
-                        period_start: date, period_end: date) -> int:
-    """기간 내 공구(인플루언서) 매출 합산. 반환: 총공제액"""
+def calc_gugu_deductions_list(headers: dict, store: str,
+                              period_start: date, period_end: date) -> list:
+    """현재 활성 공구 캠페인별 공제액 목록 반환 (캠페인 1개 = 리스트 1항목)"""
     campaigns = load_gugu_campaigns(store)
     yesterday = datetime.now(KST).date() - timedelta(days=1)
     eff_end   = min(period_end, yesterday)
 
-    total = 0
+    amounts = []
     for c in campaigns:
         ol_start = max(period_start, c["start"])
         ol_end   = min(eff_end,      c["end"])
@@ -248,27 +248,44 @@ def calc_gugu_deduction(headers: dict, store: str,
             product_no=c["product_no"],
         )
         print(f"    [공구] 공제액: {amount:,}원")
-        total += amount
+        if amount > 0:
+            amounts.append(amount)
+    return amounts
 
-    return total
 
-
-def get_existing_deduction(cell_val) -> int:
+def get_existing_deductions_list(cell_val) -> list:
     """
-    셀에 기록된 기존 수식에서 공제 총액 추출.
-    "=89517630-5000000" → 5000000
-    "89517630" 또는 빈 값 → 0
+    셀 수식에서 개별 공제액 목록 추출.
+    "=89517630-200-100" → [200, 100]
+    숫자만 있거나 빈 값 → []
     """
     s = str(cell_val).strip()
     if not s.startswith("="):
-        return 0
+        return []
     parts = re.split(r"-", s[1:])
-    if len(parts) <= 1:
-        return 0
-    try:
-        return sum(int(p.strip()) for p in parts[1:] if p.strip().isdigit())
-    except Exception:
-        return 0
+    result = []
+    for p in parts[1:]:   # 첫 항목(raw)은 제외
+        p = p.strip()
+        if p.isdigit():
+            result.append(int(p))
+    return result
+
+
+def merge_deductions(existing: list, current_active: list) -> list:
+    """
+    기존 공제 보존 + 새 공제 추가.
+    - 기존 목록은 삭제 불가 (캠페인 삭제 후에도 유지)
+    - 현재 활성 캠페인 중 기존에 없는 금액만 추가
+    예) existing=[200,100], current=[100,150] → [200,100,150]
+    """
+    remaining = list(existing)
+    final     = list(existing)
+    for amount in current_active:
+        if amount in remaining:
+            remaining.remove(amount)   # 이미 반영된 항목 → 중복 추가 방지
+        else:
+            final.append(amount)       # 새 캠페인 → 추가
+    return final
 
 
 # ── 수식 / 날짜 유틸 ─────────────────────────────────────
@@ -289,15 +306,15 @@ def fmt_period(d1: date, d2: date) -> str:
     return f"{d1.year}.{d1.month}.{d1.day}~{d2.year}.{d2.month}.{d2.day}"
 
 
-def make_formula(raw: int, deduction: int) -> object:
+def make_formula(raw: int, deductions: list) -> object:
     """
     공제 수식 생성.
-    공제 없음 → 숫자 그대로 (int)
-    공제 있음 → "=89517630-5000000" 수식 문자열
+    deductions=[]         → raw 숫자 그대로
+    deductions=[200, 100] → "=1000-200-100"
     """
-    if deduction <= 0:
+    if not deductions:
         return raw
-    return f"={raw}-{deduction}"
+    return "=" + str(raw) + "".join(f"-{d}" for d in deductions)
 
 
 # ── 메인 실행 ─────────────────────────────────────────────
@@ -404,15 +421,13 @@ def run_once():
             batch_updates.append({"range": f"F{sheet_row}", "values": [[comp_period_str]]})
             continue
 
-        # 기존 셀의 공제액 읽기 (한 번 기록된 공제는 캠페인 삭제 후에도 보존)
-        existing_promo_deduction = get_existing_deduction(row[3] if len(row) > 3 else "")
-        existing_comp_deduction  = get_existing_deduction(row[6] if len(row) > 6 else "")
+        # 기존 셀의 개별 공제 목록 추출 (캠페인 삭제 후에도 보존하기 위해)
+        existing_promo_ded = get_existing_deductions_list(row[3] if len(row) > 3 else "")
+        existing_comp_ded  = get_existing_deductions_list(row[6] if len(row) > 6 else "")
 
-        # 행사기간 공구 공제 (현재 마스터 시트 기준)
+        # 현재 활성 캠페인 공제 목록
         print(f"  ▷ 행사기간 공구 공제 계산 중...")
-        promo_gugu = calc_gugu_deduction(headers, store_raw, promo_start, promo_actual_end)
-        # 기존 공제액과 비교 → 더 큰 값 유지 (삭제된 캠페인 공제 보존)
-        promo_gugu = max(promo_gugu, existing_promo_deduction)
+        active_promo = calc_gugu_deductions_list(headers, store_raw, promo_start, promo_actual_end)
 
         # ── 비교기간 매출 (같은 토큰) ─────────────────────
         print(f"  ▷ 비교기간 매출 조회 중...")
@@ -427,21 +442,23 @@ def run_once():
             batch_updates.append({"range": f"F{sheet_row}", "values": [[comp_period_str]]})
             continue
 
-        # 비교기간 공구 공제
         print(f"  ▷ 비교기간 공구 공제 계산 중...")
-        comp_gugu = calc_gugu_deduction(headers, store_raw, comp_start, comp_end)
-        comp_gugu = max(comp_gugu, existing_comp_deduction)
+        active_comp = calc_gugu_deductions_list(headers, store_raw, comp_start, comp_end)
 
-        promo_net = promo_raw - promo_gugu
-        comp_net  = comp_raw  - comp_gugu
+        # 병합: 기존 공제 보존 + 신규 공제 추가 (삭제된 캠페인 공제도 유지)
+        promo_deductions = merge_deductions(existing_promo_ded, active_promo)
+        comp_deductions  = merge_deductions(existing_comp_ded,  active_comp)
 
-        print(f"  행사: {promo_raw:,}원 - 공구 {promo_gugu:,}원 = {promo_net:,}원")
-        print(f"  비교: {comp_raw:,}원 - 공구 {comp_gugu:,}원 = {comp_net:,}원")
+        promo_net = promo_raw - sum(promo_deductions)
+        comp_net  = comp_raw  - sum(comp_deductions)
+
+        print(f"  행사: {promo_raw:,}원 - 공구 {sum(promo_deductions):,}원 = {promo_net:,}원")
+        print(f"  비교: {comp_raw:,}원 - 공구 {sum(comp_deductions):,}원 = {comp_net:,}원")
         print(f"  증감: {promo_net - comp_net:+,}원")
 
         # ── 셀 수식 구성 ───────────────────────────────────
-        d_val = make_formula(promo_raw, promo_gugu)
-        g_val = make_formula(comp_raw,  comp_gugu)
+        d_val = make_formula(promo_raw, promo_deductions)
+        g_val = make_formula(comp_raw,  comp_deductions)
 
         # E, H, I: D·G 셀 참조 수식 → D·G 변경 시 자동 반영
         e_val = f"=D{sheet_row}/{elapsed_days}"
