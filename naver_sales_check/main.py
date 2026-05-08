@@ -112,33 +112,23 @@ def _get_access_token(client_id: str, client_secret: str) -> str:
     return resp.json()["access_token"]
 
 
-def get_period_sales(headers: dict, date_from: str, date_to: str,
-                     product_no: str = None) -> int:
-    """
-    기간 전체를 한 번에 조회 (페이지네이션).
-    일별 분할 없이 from~to 범위로 직접 API 호출 → Rate Limit 없음.
-    product_no 지정 시 해당 상품만 합산 (공구 공제용).
-    """
-    yesterday = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
-    start_dt  = datetime.strptime(date_from, "%Y-%m-%d")
-    end_dt    = min(datetime.strptime(date_to, "%Y-%m-%d"), yesterday)
+def _query_one_day(headers: dict, date_dt: datetime,
+                   product_no: str = None) -> int:
+    """하루치 매출 합산 (페이지네이션 포함). 네이버 API 24시간 제한 대응."""
+    next_day = date_dt + timedelta(days=1)
+    from_str = date_dt.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+    to_str   = next_day.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
 
-    if start_dt > end_dt:
-        return 0
-
-    from_str = start_dt.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
-    to_str   = (end_dt + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
-
-    total = 0
-    page  = 1
+    day_total = 0
+    page = 1
     while True:
         url = (
             f"{NAVER_BASE}/external/v1/pay-order/seller/product-orders"
             f"?from={from_str}&to={to_str}"
             f"&rangeType=PAYED_DATETIME&pageSize=300&page={page}"
         )
-        for attempt in range(4):
-            resp = requests.get(url, headers=headers, timeout=60)
+        for attempt in range(3):
+            resp = requests.get(url, headers=headers, timeout=30)
             if resp.status_code == 429:
                 wait = 5 * (attempt + 1)
                 print(f"    [Rate Limit] {wait}초 후 재시도...")
@@ -147,12 +137,11 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
                 break
 
         if resp.status_code != 200:
-            print(f"    [API 오류] {resp.status_code}: {resp.text[:150]}")
+            print(f"    [API 오류] {resp.status_code}: {resp.text[:100]}")
             break
 
         data     = resp.json().get("data", {})
         contents = data.get("contents", [])
-
         for item in contents:
             po = item.get("content", {}).get("productOrder", {})
             if po.get("productOrderStatus", "") not in SALE_STATUSES:
@@ -162,13 +151,36 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
             amount = po.get("totalPaymentAmount") or po.get("paymentAmount")
             if not amount:
                 amount = int(po.get("quantity") or 1) * int(po.get("unitPrice") or 0)
-            total += int(amount)
+            day_total += int(amount)
 
-        has_next = data.get("pagination", {}).get("hasNext", False)
-        print(f"    페이지 {page}: {len(contents)}건")
-        if not has_next:
+        if not data.get("pagination", {}).get("hasNext", False):
             break
         page += 1
+
+    return day_total
+
+
+def get_period_sales(headers: dict, date_from: str, date_to: str,
+                     product_no: str = None) -> int:
+    """
+    기간 매출 합산. 하루씩 순차 조회 (네이버 API 24시간 제한).
+    병렬 호출 없이 순차 처리 → Rate Limit 없음.
+    product_no 지정 시 해당 상품만 합산 (공구 공제용).
+    """
+    yesterday  = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
+    start_dt   = datetime.strptime(date_from, "%Y-%m-%d")
+    actual_end = min(datetime.strptime(date_to, "%Y-%m-%d"), yesterday)
+
+    if start_dt > actual_end:
+        return 0
+
+    total = 0
+    d = start_dt
+    while d <= actual_end:
+        day_total = _query_one_day(headers, d, product_no)
+        print(f"    {d.strftime('%m/%d')}: {day_total:,}원")
+        total += day_total
+        d += timedelta(days=1)
 
     return total
 
@@ -240,7 +252,6 @@ def calc_gugu_deduction(headers: dict, store: str,
             ol_start.strftime("%Y-%m-%d"),
             ol_end.strftime("%Y-%m-%d"),
             product_no=c["product_no"],
-            workers=2,
         )
         print(f"    [공구] 공제액: {amount:,}원")
         if amount > 0:
