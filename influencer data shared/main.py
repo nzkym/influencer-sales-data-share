@@ -303,6 +303,7 @@ def update_summary_tab():
             "date_to":        campaign["date_to"],
             "total_orders":   total_orders,
             "total_products": total_products,
+            "status":         "완료" if campaign["is_ended"] else "진행중",
             "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
         })
 
