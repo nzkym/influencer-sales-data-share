@@ -258,73 +258,71 @@ def _calc_totals(sales_data: list) -> tuple:
 
 
 def update_summary_tab():
-    """마스터 시트의 '캠페인 실적' 탭에 새로 종료된 캠페인만 추가."""
+    """마스터 시트의 '캠페인 실적' 탭 업데이트."""
     KST = timezone(timedelta(hours=9))
     all_campaigns = load_all_campaigns()
-
-    # 종료된 캠페인만
-    ended = [c for c in all_campaigns if c["is_ended"]]
-    if not ended:
+    if not all_campaigns:
         return
 
-    # 이미 탭에 있는 제목 목록
     existing = sheets.read_summary_tab(MASTER_SHEET_URL)
+    today_str = datetime.now(KST).date().strftime("%Y-%m-%d")
+    changed = False
 
-    # 처리 대상:
-    # 1) 종료됐고 탭에 없는 신규 캠페인
-    # 2) 탭에 이미 있지만 product_name/url이 빈 캠페인 (진행중 포함)
-    new_campaigns = [
+    # 1) 기존 행: 상태 빈칸 채우기 + URL 정리
+    for r in existing.values():
+        if not r.get("status"):
+            r["status"] = "완료" if str(r.get("date_to", "")) < today_str else "진행중"
+            changed = True
+        if r.get("url") and "?" in r["url"]:
+            r["url"] = r["url"].split("?")[0]
+            changed = True
+
+    # 2) 새로 처리할 캠페인:
+    #    - 종료됐고 탭에 없는 신규
+    #    - 제품명이 없거나 캠페인 제목과 동일한 경우 (잘못된 짧은 이름)
+    fetch_campaigns = [
         c for c in all_campaigns
         if (c["is_ended"] and c["title"] not in existing)
         or (c["title"] in existing
             and (not existing[c["title"]].get("product_name")
-                 or not existing[c["title"]].get("url")))
+                 or existing[c["title"]].get("product_name") == c["title"]))
     ]
-    if not new_campaigns:
-        return
-
-    print(f"\n  [실적 집계] 캠페인 {len(new_campaigns)}개 처리 중...")
 
     new_rows = []
-    for campaign in new_campaigns:
-        clean_url = campaign["url"].split("?")[0]
-        try:
-            total_orders, total_products, _ = sheets.read_totals_from_sheet(campaign["sheet_url"])
-        except Exception:
-            total_orders, total_products = "-", "-"
-        product_name = naver_api.get_product_name_from_url(clean_url)
+    if fetch_campaigns:
+        print(f"\n  [실적 집계] 캠페인 {len(fetch_campaigns)}개 처리 중...")
+        for campaign in fetch_campaigns:
+            clean_url = campaign["url"].split("?")[0]
+            try:
+                total_orders, total_products, _ = sheets.read_totals_from_sheet(campaign["sheet_url"])
+            except Exception:
+                total_orders, total_products = "-", "-"
+            product_name = naver_api.get_product_name_from_url(clean_url)
 
-        new_rows.append({
-            "title":          campaign["title"],
-            "product_name":   product_name,
-            "url":            clean_url,
-            "store":          campaign["store"],
-            "date_from":      campaign["date_from"],
-            "date_to":        campaign["date_to"],
-            "total_orders":   total_orders,
-            "total_products": total_products,
-            "status":         "완료" if campaign["is_ended"] else "진행중",
-            "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
-        })
+            new_rows.append({
+                "title":          campaign["title"],
+                "product_name":   product_name,
+                "url":            clean_url,
+                "store":          campaign["store"],
+                "date_from":      campaign["date_from"],
+                "date_to":        campaign["date_to"],
+                "total_orders":   total_orders,
+                "total_products": total_products,
+                "status":         "완료" if campaign["is_ended"] else "진행중",
+                "updated_at":     datetime.now(KST).strftime("%Y-%m-%d %H:%M"),
+            })
+        changed = True
 
-    # 재조회된 건으로 기존 데이터 덮어쓰기
+    if not changed and not new_rows:
+        return
+
     new_titles = {r["title"] for r in new_rows}
     kept_rows = [r for r in existing.values() if r["title"] not in new_titles]
-
-    # 기존 행 상태 빈칸: 종료일 기준으로 자동 설정
-    today_str = datetime.now(KST).date().strftime("%Y-%m-%d")
-    for r in kept_rows:
-        if not r.get("status"):
-            r["status"] = "완료" if str(r.get("date_to", "")) < today_str else "진행중"
-        # URL 쿼리파라미터 제거
-        if r.get("url"):
-            r["url"] = r["url"].split("?")[0]
-
     all_rows = new_rows + kept_rows
     all_rows.sort(key=lambda r: str(r.get("date_to", "")), reverse=True)
 
     sheets.write_summary_tab(MASTER_SHEET_URL, all_rows)
-    print(f"  → 캠페인 실적 탭 업데이트 완료 (+{len(new_rows)}건)\n")
+    print(f"  → 캠페인 실적 탭 업데이트 완료\n")
 
 
 # ── 메인 실행 ────────────────────────────────────────────
