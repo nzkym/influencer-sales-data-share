@@ -460,30 +460,61 @@ def run_once():
         d_val = make_formula(promo_raw, promo_deductions)
         g_val = make_formula(comp_raw,  comp_deductions)
 
-        # E, H: 일평균 (D·G 셀 참조)
+        # E, H: 일평균
         e_val = f"=D{sheet_row}/{elapsed_days}"
         h_val = f"=G{sheet_row}/{promo_total_days}"
-        # I: 일평균 증감 (E-H) → 진행 중에도 공정한 비교, 행사 효과 즉시 확인
-        i_val = f"=E{sheet_row}-H{sheet_row}"
+
+        # I: 행사 종료 후에만 총합 비교 (인센티브 정산용)
+        # 진행 중에는 비워둠 → 마이너스 노출로 사기 저하 방지
+        if promo_end < today:
+            i_val = f"=D{sheet_row}-G{sheet_row}"
+        else:
+            i_val = ""
+
+        # K열: 집계기간 ("4.28~5.8 (10일)")
+        period_text = (f"{promo_start.month}.{promo_start.day}"
+                       f"~{promo_actual_end.month}.{promo_actual_end.day}"
+                       f" ({elapsed_days}일)")
+
+        # L열 이후: 행사 진행 중일 때 예상 매출 표기
+        # 현재 일평균이 종료일까지 유지된다고 가정
+        # 예상 행사매출 = E열(일평균) × 총행사일수
+        # 예상 증감 = 예상행사매출 - G열(비교매출)
+        if promo_end >= today:   # 진행 중
+            projected_val    = f"=E{sheet_row}*{promo_total_days}"  # 예상 행사매출
+            projected_diff   = f"=M{sheet_row}-G{sheet_row}"         # 예상 증감
+            remaining_days   = (promo_end - promo_actual_end).days
+            projected_label  = f"예상({remaining_days}일 남음)"
+        else:
+            projected_val   = ""
+            projected_diff  = ""
+            projected_label = ""
 
         batch_updates.append({
             "range": f"D{sheet_row}:I{sheet_row}",
             "values": [[d_val, e_val, comp_period_str, g_val, h_val, i_val]],
         })
+        batch_updates.append({
+            "range": f"K{sheet_row}:O{sheet_row}",
+            "values": [[period_text, "",
+                        projected_val, projected_diff, projected_label]],
+        })
 
-    # 마지막 업데이트 시간 항상 기재 (K1셀)
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    batch_updates.append({
-        "range": "K1",
-        "values": [[f"업데이트: {update_time}"]],
-    })
+    batch_updates.append({"range": "K1:O1", "values": [[
+        "집계기간",
+        f"업데이트: {update_time}",
+        "예상행사매출(일평균유지시)",
+        "예상증감(예상-비교)",
+        "비고",
+    ]]})
 
     if batch_updates:
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
         _apply_number_format(spreadsheet, ws, len(all_values))
         print(f"\n✅ 업데이트 완료 ({update_time})")
     else:
-        print("\n업데이트할 행이 없습니다.")
+        print(f"\n업데이트할 행이 없습니다. ({update_time})")
 
     print(f"{'='*55}\n")
 
