@@ -70,12 +70,13 @@ def _extract_sheet_id(url: str) -> str:
 
 
 def _apply_number_format(spreadsheet, ws, data_rows: int):
-    """숫자 열에 #,##0 콤마 서식 적용 (E, F, H, I, J, K, L, M)"""
+    """숫자 열에 #,##0 콤마 서식 적용"""
     if data_rows < 2:
         return
     R = []
-    # E=4, F=5, H=7, I=8, J=9, K=10, L=11, M=12 (0-indexed)
-    for col_idx in [4, 5, 7, 8, 9, 10, 11, 12]:
+    # D=3(일평균증감) E=4(예상매출) F=5(예상증감) G=6(최종증감)
+    # I=8(행사매출) J=9(행사일평균) L=11(비교매출) M=12(비교일평균)
+    for col_idx in [3, 4, 5, 6, 8, 9, 11, 12]:
         R.append({"repeatCell": {
             "range": {
                 "sheetId": ws.id,
@@ -427,7 +428,7 @@ def run_once():
 
         # 행사기간 공구 공제
         print(f"  ▷ 행사기간 공구 공제 계산 중...")
-        existing_promo_ded = get_existing_deductions_list(row[4] if len(row) > 4 else "")  # E열
+        existing_promo_ded = get_existing_deductions_list(row[8] if len(row) > 8 else "")  # I열(행사매출)
         active_promo       = calc_gugu_deductions_list(headers_auth, store_raw, promo_start, promo_actual_end)
         promo_deductions   = merge_deductions(existing_promo_ded, active_promo)
 
@@ -446,7 +447,7 @@ def run_once():
 
         # 비교기간 공구 공제
         print(f"  ▷ 비교기간 공구 공제 계산 중...")
-        existing_comp_ded = get_existing_deductions_list(row[7] if len(row) > 7 else "")   # H열
+        existing_comp_ded = get_existing_deductions_list(row[11] if len(row) > 11 else "")  # L열(비교매출)
         active_comp       = calc_gugu_deductions_list(headers_auth, store_raw, comp_start, comp_end)
         comp_deductions   = merge_deductions(existing_comp_ded, active_comp)
 
@@ -457,60 +458,63 @@ def run_once():
         print(f"  비교: {comp_raw:,}원 - 공구 {sum(comp_deductions):,}원 = {comp_net:,}원")
 
         # ── 셀 수식 구성 ───────────────────────────────────
-        e_val = make_formula(promo_raw, promo_deductions)   # E: 행사기간매출
-        f_val = f"=E{sheet_row}/{elapsed_days}"             # F: 행사일평균
-        h_val = make_formula(comp_raw, comp_deductions)     # H: 비교매출
-        i_val = f"=H{sheet_row}/{promo_total_days}"         # I: 비교일평균
-        j_val = f"=F{sheet_row}-I{sheet_row}"               # J: 일평균증감 (항상 표시)
+        # 새 컬럼 순서: D(일평균증감) E(예상매출) F(예상증감) G(최종증감)
+        #              H(집계기간) I(행사매출) J(행사일평균) K(비교일자) L(비교매출) M(비교일평균)
 
-        is_ended = promo_end < today
+        i_val = make_formula(promo_raw, promo_deductions)   # I: 행사기간매출
+        j_val = f"=I{sheet_row}/{elapsed_days}"             # J: 행사일평균
+        l_val = make_formula(comp_raw,  comp_deductions)    # L: 비교매출
+        m_val = f"=L{sheet_row}/{promo_total_days}"         # M: 비교일평균
+        d_val = f"=J{sheet_row}-M{sheet_row}"               # D: 일평균증감 (항상 표시)
+
+        is_ended       = promo_end < today
         remaining_days = (promo_end - promo_actual_end).days
 
         if not is_ended:
-            # 행사 진행 중: 예상매출/예상증감 표시, 최종증감 비워둠
-            k_val = f"=F{sheet_row}*{promo_total_days}"   # K: 예상행사매출
-            l_val = f"=K{sheet_row}-H{sheet_row}"          # L: 예상증감
-            m_val = ""                                      # M: 최종증감 (종료후)
-            print(f"  일평균증감: {promo_net//elapsed_days - comp_net//promo_total_days:+,}원/일 | 예상({remaining_days}일 남음)")
+            # 행사 진행 중: D(일평균증감) + E/F(예상) 표시, G(최종) 비워둠
+            e_val = f"=J{sheet_row}*{promo_total_days}"   # E: 예상행사매출
+            f_val = f"=E{sheet_row}-L{sheet_row}"          # F: 예상증감
+            g_val = ""                                      # G: 최종증감 (종료후)
+            print(f"  일평균증감: {(promo_net//elapsed_days - comp_net//promo_total_days):+,}원/일 | {remaining_days}일 남음")
         else:
-            # 행사 종료: 최종증감 표시, 예상 비워둠
-            k_val = ""
-            l_val = ""
-            m_val = f"=E{sheet_row}-H{sheet_row}"          # M: 최종증감 (인센티브 정산용)
+            # 행사 종료: G(최종증감) 표시, E/F(예상) 비워둠
+            e_val = ""
+            f_val = ""
+            g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 최종증감 (인센티브 정산용)
             print(f"  최종증감: {promo_net - comp_net:+,}원")
 
         # D~M 한 번에 기입 (10개 열)
         batch_updates.append({
             "range": f"D{sheet_row}:M{sheet_row}",
             "values": [[
-                period_text,      # D: 집계기간
-                e_val,            # E: 행사기간매출
-                f_val,            # F: 행사일평균
-                comp_period_str,  # G: 비교일자
-                h_val,            # H: 비교매출
-                i_val,            # I: 비교일평균
-                j_val,            # J: 일평균증감 (항상)
-                k_val,            # K: 예상행사매출 (진행중)
-                l_val,            # L: 예상증감 (진행중)
-                m_val,            # M: 최종증감 (종료후)
+                d_val,            # D: ★일평균증감 (항상)
+                e_val,            # E: 예상행사매출 (진행중)
+                f_val,            # F: 예상증감 (진행중)
+                g_val,            # G: 최종증감 (종료후/인센티브)
+                period_text,      # H: 집계기간
+                i_val,            # I: 행사기간매출
+                j_val,            # J: 행사일평균
+                comp_period_str,  # K: 비교일자
+                l_val,            # L: 비교매출
+                m_val,            # M: 비교일평균
             ]],
         })
 
     # 헤더 + 업데이트 시간 기재
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
     batch_updates.append({"range": "D1:O1", "values": [[
-        "집계기간",
-        "행사기간매출(공구제외)",
-        "행사 일평균",
-        "비교일자",
-        "비교매출(공구제외)",
-        "비교 일평균",
-        "★ 일평균증감(행사-비교)",
-        "예상행사매출(일평균유지시)",
-        "예상증감",
-        "최종증감(종료후/인센티브)",
-        "",              # N1: 채널 헤더는 직원이 직접 관리
-        f"업데이트: {update_time}",   # O1
+        "★일평균증감(행사-비교)",      # D
+        "예상행사매출(일평균유지시)",   # E
+        "예상증감(예상-비교)",          # F
+        "최종증감(종료후/인센티브)",    # G
+        "집계기간",                     # H
+        "행사기간매출(공구제외)",       # I
+        "행사 일평균",                  # J
+        "비교일자",                     # K
+        "비교매출(공구제외)",           # L
+        "비교 일평균",                  # M
+        "",                             # N: 채널 (직원 관리)
+        f"업데이트: {update_time}",     # O
     ]]})
 
     if batch_updates:
