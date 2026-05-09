@@ -75,8 +75,8 @@ def _apply_number_format(spreadsheet, ws, data_rows: int):
     if data_rows < 2:
         return
     R = []
-    # 숫자 서식: D E F G I J L M P Q (결제자수 포함)
-    for col_idx in [3, 4, 5, 6, 8, 9, 11, 12, 15, 16]:
+    # 숫자 서식: D E F G I J L M
+    for col_idx in [3, 4, 5, 6, 8, 9, 11, 12]:
         R.append({"repeatCell": {
             "range": {
                 "sheetId": ws.id,
@@ -635,12 +635,6 @@ def run_once():
             g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 최종증감 (인센티브 정산용)
             print(f"  최종증감: {promo_net - comp_net:+,}원")
 
-        # P, Q열: 결제자수 기입
-        batch_updates.append({
-            "range": f"P{sheet_row}:Q{sheet_row}",
-            "values": [[promo_count, comp_count]],
-        })
-
         # D~M 한 번에 기입 (10개 열)
         batch_updates.append({
             "range": f"D{sheet_row}:M{sheet_row}",
@@ -659,9 +653,9 @@ def run_once():
         })
 
     # 헤더 + 업데이트 시간 기재
-    # 헤더는 직원이 자유롭게 수정 가능 — 프로그램은 업데이트 시간(R1)만 기록
+    # 헤더는 직원이 자유롭게 수정 가능 — 프로그램은 업데이트 시간(P1)만 기록
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    batch_updates.append({"range": "R1", "values": [[f"업데이트: {update_time}"]]})
+    batch_updates.append({"range": "P1", "values": [[f"업데이트: {update_time}"]]})
 
     if batch_updates:
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
