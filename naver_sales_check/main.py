@@ -18,6 +18,7 @@ import os
 import time
 from pathlib import Path
 from datetime import datetime, timedelta, timezone, date
+from concurrent.futures import ThreadPoolExecutor
 
 from dotenv import load_dotenv
 import gspread
@@ -259,17 +260,35 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
         except ValueError:
             pass   # 24시간 제한 → 일별 조회로 폴백
 
-    # 전체 스토어 또는 폴백: 하루씩 순차 조회
-    total = 0
-    count = 0
+    # 전체 스토어 또는 폴백: 2개씩 병렬 조회 (Rate Limit 방지 위해 딜레이 포함)
+    days = []
     d = start_dt
     while d <= actual_end:
-        day_total, day_count = _query_one_day(headers, d, product_no)
+        days.append(d)
+        d += timedelta(days=1)
+
+    def fetch_day(day):
+        return day, *_query_one_day(headers, day, product_no)
+
+    results = {}
+    total = 0
+    count = 0
+
+    # 2개씩 묶어서 병렬 처리, 각 묶음 사이 1초 딜레이
+    for i in range(0, len(days), 2):
+        batch = days[i:i+2]
+        with ThreadPoolExecutor(max_workers=2) as ex:
+            for day, day_total, day_count in ex.map(fetch_day, batch):
+                results[day] = (day_total, day_count)
+        if i + 2 < len(days):
+            time.sleep(1)
+
+    for day in days:
+        day_total, day_count = results[day]
         if day_total > 0:
-            print(f"    {d.strftime('%m/%d')}: {day_total:,}원 ({day_count}건)")
+            print(f"    {day.strftime('%m/%d')}: {day_total:,}원 ({day_count}건)")
         total += day_total
         count += day_count
-        d += timedelta(days=1)
 
     return total, count
 
