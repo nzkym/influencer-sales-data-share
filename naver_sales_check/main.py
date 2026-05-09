@@ -70,12 +70,11 @@ def _extract_sheet_id(url: str) -> str:
 
 
 def _apply_number_format(spreadsheet, ws, data_rows: int):
-    """숫자 열에 #,##0 콤마 서식 적용"""
+    """숫자 열 콤마 서식 + O열 텍스트 서식(상품번호 보호) + 초록색 제거"""
     if data_rows < 2:
         return
     R = []
-    # D=3(일평균증감) E=4(예상매출) F=5(예상증감) G=6(최종증감)
-    # I=8(행사매출) J=9(행사일평균) L=11(비교매출) M=12(비교일평균)
+    # 숫자 서식: D E F G I J L M
     for col_idx in [3, 4, 5, 6, 8, 9, 11, 12]:
         R.append({"repeatCell": {
             "range": {
@@ -90,6 +89,21 @@ def _apply_number_format(spreadsheet, ws, data_rows: int):
             }},
             "fields": "userEnteredFormat.numberFormat",
         }})
+    # O열(14): 텍스트 서식 강제 + 배경 흰색 (상품번호가 숫자로 변환되지 않도록)
+    R.append({"repeatCell": {
+        "range": {
+            "sheetId": ws.id,
+            "startRowIndex": 0,
+            "endRowIndex": max(data_rows, 3),
+            "startColumnIndex": 14,
+            "endColumnIndex": 15,
+        },
+        "cell": {"userEnteredFormat": {
+            "numberFormat": {"type": "TEXT"},
+            "backgroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0},
+        }},
+        "fields": "userEnteredFormat(numberFormat,backgroundColor)",
+    }})
     if R:
         spreadsheet.batch_update({"requests": R})
 
@@ -305,6 +319,36 @@ def fmt_period(d1: date, d2: date) -> str:
     return f"{d1.year}.{d1.month}.{d1.day}~{d2.year}.{d2.month}.{d2.day}"
 
 
+def parse_product_ids(cell_val) -> list:
+    """
+    O열 셀에서 상품번호 목록 추출.
+    입력 예: "11774034951,13393725183,13088952477"
+    반환 예: ["11774034951", "13393725183", "13088952477"]
+    """
+    s = str(cell_val).strip()
+    if not s or s in ("0", ""):
+        return []
+    ids = []
+    for part in re.split(r"[,\s，]+", s):
+        part = part.strip().replace(",", "")
+        if part.isdigit() and len(part) >= 8:   # 네이버 상품번호 최소 8자리
+            ids.append(part)
+    return ids
+
+
+def calc_manual_deductions(headers: dict, product_ids: list,
+                           date_from: str, date_to: str) -> list:
+    """수동 지정 상품번호별 기간 매출 조회 후 금액 목록 반환"""
+    amounts = []
+    for pid in product_ids:
+        print(f"    [수동공제] 상품 {pid} 조회 중...")
+        amount = get_period_sales(headers, date_from, date_to, product_no=pid)
+        print(f"    [수동공제] 상품 {pid}: {amount:,}원")
+        if amount > 0:
+            amounts.append(amount)
+    return amounts
+
+
 def make_formula(raw: int, deductions: list) -> object:
     """공제 수식 생성. deductions=[] → int, [200,100] → '=raw-200-100'"""
     if not deductions:
@@ -357,6 +401,9 @@ def run_once():
         store_raw = str(row[13]).strip() if len(row) > 13 else ""
         if not store_raw:
             store_raw = str(row[9]).strip() if len(row) > 9 else ""
+
+        # O열(index 14): 수동 공구 상품번호 (콤마 구분)
+        manual_ids = parse_product_ids(row[14] if len(row) > 14 else "")
 
         if not title or not start_raw or not end_raw or not store_raw:
             continue
@@ -426,10 +473,16 @@ def run_once():
             batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
-        # 행사기간 공구 공제
+        # 행사기간 공구 공제 (마스터 시트 + 수동 상품번호)
         print(f"  ▷ 행사기간 공구 공제 계산 중...")
         existing_promo_ded = get_existing_deductions_list(row[8] if len(row) > 8 else "")  # I열(행사매출)
         active_promo       = calc_gugu_deductions_list(headers_auth, store_raw, promo_start, promo_actual_end)
+        if manual_ids:
+            manual_promo = calc_manual_deductions(
+                headers_auth, manual_ids,
+                promo_start.strftime("%Y-%m-%d"), promo_actual_end.strftime("%Y-%m-%d"),
+            )
+            active_promo = active_promo + manual_promo
         promo_deductions   = merge_deductions(existing_promo_ded, active_promo)
 
         # ── 비교기간 매출 조회 (같은 토큰) ───────────────
@@ -445,10 +498,16 @@ def run_once():
             batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
-        # 비교기간 공구 공제
+        # 비교기간 공구 공제 (마스터 시트 + 수동 상품번호)
         print(f"  ▷ 비교기간 공구 공제 계산 중...")
         existing_comp_ded = get_existing_deductions_list(row[11] if len(row) > 11 else "")  # L열(비교매출)
         active_comp       = calc_gugu_deductions_list(headers_auth, store_raw, comp_start, comp_end)
+        if manual_ids:
+            manual_comp = calc_manual_deductions(
+                headers_auth, manual_ids,
+                comp_start.strftime("%Y-%m-%d"), comp_end.strftime("%Y-%m-%d"),
+            )
+            active_comp = active_comp + manual_comp
         comp_deductions   = merge_deductions(existing_comp_ded, active_comp)
 
         promo_net = promo_raw - sum(promo_deductions)
@@ -502,7 +561,7 @@ def run_once():
 
     # 헤더 + 업데이트 시간 기재
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    batch_updates.append({"range": "D1:O1", "values": [[
+    batch_updates.append({"range": "D1:P1", "values": [[
         "★일평균증감(행사-비교)",      # D
         "예상행사매출(일평균유지시)",   # E
         "예상증감(예상-비교)",          # F
@@ -514,7 +573,8 @@ def run_once():
         "비교매출(공구제외)",           # L
         "비교 일평균",                  # M
         "",                             # N: 채널 (직원 관리)
-        f"업데이트: {update_time}",     # O
+        "공구상품ID(콤마구분입력)",     # O: 직원이 수동으로 상품번호 입력
+        f"업데이트: {update_time}",     # P
     ]]})
 
     if batch_updates:
