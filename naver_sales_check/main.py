@@ -1,13 +1,16 @@
 """
 네이버 스마트스토어 행사 매출증감 확인 프로그램
-이경하 담당 | 매일 오전 9시 자동 실행
+이경하 담당 | 매일 오전 9시 자동 실행 (Google Cloud VM crontab)
 
-시트 열 구조:
-  A: 제목  B: 행사시작일  C: 행사종료일
-  D: 행사기간매출(전일까지)  E: 행사일자 평균매출
-  F: 비교일자(자동계산)  G: 비교일자매출  H: 비교일자 평균매출
-  I: 행사기간매출-비교일자매출
-  J: 채널(nutone/jdhealth/nutpet)
+컬럼 구조:
+  A: 제목          B: 행사시작일(직원)  C: 행사종료일(직원)
+  D: 집계기간      E: 행사기간매출     F: 행사일평균
+  G: 비교일자      H: 비교매출         I: 비교일평균
+  J: 일평균증감(F-I) ← 항상 표시, 행사 효과 즉시 확인
+  K: 예상행사매출  L: 예상증감         ← 행사 진행 중만 표시
+  M: 최종증감(E-H) ← 행사 종료 후만 표시 (인센티브 정산용)
+  N: 채널(직원입력: nutone/jdhealth/nutpet)
+  O: 업데이트시간 (헤더행에만)
 """
 
 import re
@@ -27,7 +30,7 @@ BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
 SHEET_URL        = os.getenv("SALES_CHECK_SHEET_URL")
-MASTER_SHEET_URL = os.getenv("MASTER_SHEET_URL")   # 공구 캠페인 마스터 시트
+MASTER_SHEET_URL = os.getenv("MASTER_SHEET_URL")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -67,11 +70,12 @@ def _extract_sheet_id(url: str) -> str:
 
 
 def _apply_number_format(spreadsheet, ws, data_rows: int):
-    """D, E, G, H, I 열에 #,##0 콤마 서식 적용"""
+    """숫자 열에 #,##0 콤마 서식 적용 (E, F, H, I, J, K, L, M)"""
     if data_rows < 2:
         return
     R = []
-    for col_idx in [3, 4, 6, 7, 8]:   # D=3, E=4, G=6, H=7, I=8 (0-indexed)
+    # E=4, F=5, H=7, I=8, J=9, K=10, L=11, M=12 (0-indexed)
+    for col_idx in [4, 5, 7, 8, 9, 10, 11, 12]:
         R.append({"repeatCell": {
             "range": {
                 "sheetId": ws.id,
@@ -162,11 +166,7 @@ def _query_one_day(headers: dict, date_dt: datetime,
 
 def get_period_sales(headers: dict, date_from: str, date_to: str,
                      product_no: str = None) -> int:
-    """
-    기간 매출 합산. 하루씩 순차 조회 (네이버 API 24시간 제한).
-    병렬 호출 없이 순차 처리 → Rate Limit 없음.
-    product_no 지정 시 해당 상품만 합산 (공구 공제용).
-    """
+    """기간 매출 합산. 하루씩 순차 조회 (네이버 API 24시간 제한)."""
     yesterday  = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
     start_dt   = datetime.strptime(date_from, "%Y-%m-%d")
     actual_end = min(datetime.strptime(date_to, "%Y-%m-%d"), yesterday)
@@ -192,7 +192,7 @@ def load_gugu_campaigns(store: str) -> list:
     if not MASTER_SHEET_URL:
         return []
     try:
-        gs = _get_gs_client()
+        gs  = _get_gs_client()
         sid = _extract_sheet_id(MASTER_SHEET_URL)
         sp  = gs.open_by_key(sid)
         gid_m = re.search(r"gid=(\d+)", MASTER_SHEET_URL)
@@ -229,7 +229,7 @@ def load_gugu_campaigns(store: str) -> list:
 
 def calc_gugu_deductions_list(headers: dict, store: str,
                               period_start: date, period_end: date) -> list:
-    """현재 활성 공구 캠페인별 공제액 목록 반환 (캠페인 1개 = 리스트 1항목)"""
+    """현재 활성 공구 캠페인별 공제액 목록 반환"""
     campaigns = load_gugu_campaigns(store)
     yesterday = datetime.now(KST).date() - timedelta(days=1)
     eff_end   = min(period_end, yesterday)
@@ -257,14 +257,13 @@ def get_existing_deductions_list(cell_val) -> list:
     """
     셀 수식에서 개별 공제액 목록 추출.
     "=89517630-200-100" → [200, 100]
-    숫자만 있거나 빈 값 → []
     """
     s = str(cell_val).strip()
     if not s.startswith("="):
         return []
     parts = re.split(r"-", s[1:])
     result = []
-    for p in parts[1:]:   # 첫 항목(raw)은 제외
+    for p in parts[1:]:
         p = p.strip()
         if p.isdigit():
             result.append(int(p))
@@ -276,15 +275,14 @@ def merge_deductions(existing: list, current_active: list) -> list:
     기존 공제 보존 + 새 공제 추가.
     - 기존 목록은 삭제 불가 (캠페인 삭제 후에도 유지)
     - 현재 활성 캠페인 중 기존에 없는 금액만 추가
-    예) existing=[200,100], current=[100,150] → [200,100,150]
     """
     remaining = list(existing)
     final     = list(existing)
     for amount in current_active:
         if amount in remaining:
-            remaining.remove(amount)   # 이미 반영된 항목 → 중복 추가 방지
+            remaining.remove(amount)
         else:
-            final.append(amount)       # 새 캠페인 → 추가
+            final.append(amount)
     return final
 
 
@@ -307,11 +305,7 @@ def fmt_period(d1: date, d2: date) -> str:
 
 
 def make_formula(raw: int, deductions: list) -> object:
-    """
-    공제 수식 생성.
-    deductions=[]         → raw 숫자 그대로
-    deductions=[200, 100] → "=1000-200-100"
-    """
+    """공제 수식 생성. deductions=[] → int, [200,100] → '=raw-200-100'"""
     if not deductions:
         return raw
     return "=" + str(raw) + "".join(f"-{d}" for d in deductions)
@@ -328,7 +322,6 @@ def run_once():
     if not SHEET_URL:
         print("[오류] .env에 SALES_CHECK_SHEET_URL이 없습니다.")
         return
-
     if not MASTER_SHEET_URL:
         print("  [안내] MASTER_SHEET_URL 미설정 → 공구 공제 없이 진행")
 
@@ -344,21 +337,25 @@ def run_once():
         ws = spreadsheet.sheet1
 
     all_values = ws.get_all_values()
-    today      = datetime.now(KST).date()
-    yesterday  = today - timedelta(days=1)
+    today     = datetime.now(KST).date()
+    yesterday = today - timedelta(days=1)
 
     batch_updates = []
 
     for row_idx, row in enumerate(all_values):
         if row_idx == 0:
             continue
-        if len(row) < 10:
+        if len(row) < 3:
             continue
 
-        title     = str(row[0]).strip()
-        start_raw = str(row[1]).strip()
-        end_raw   = str(row[2]).strip()
-        store_raw = str(row[9]).strip()
+        title     = str(row[0]).strip()   # A
+        start_raw = str(row[1]).strip()   # B
+        end_raw   = str(row[2]).strip()   # C
+
+        # 채널: N열(index 13) 우선, 없으면 J열(index 9) 이전 위치에서 읽기
+        store_raw = str(row[13]).strip() if len(row) > 13 else ""
+        if not store_raw:
+            store_raw = str(row[9]).strip() if len(row) > 9 else ""
 
         if not title or not start_raw or not end_raw or not store_raw:
             continue
@@ -390,7 +387,14 @@ def run_once():
         comp_end   = promo_start - timedelta(days=1)
         comp_start = comp_end - timedelta(days=promo_total_days - 1)
 
+        # 집계기간 텍스트 (D열)
+        period_text = (f"{promo_start.month}.{promo_start.day}"
+                       f"~{promo_actual_end.month}.{promo_actual_end.day}"
+                       f" ({elapsed_days}일)")
+
+        # 비교일자 텍스트 (G열)
         comp_period_str = fmt_period(comp_start, comp_end)
+
         sheet_row = row_idx + 1
 
         print(f"\n[행 {sheet_row}] {title} ({store_raw})")
@@ -398,115 +402,115 @@ def run_once():
         print(f"  집계: {promo_start}~{promo_actual_end} ({elapsed_days}일 경과)")
         print(f"  비교: {comp_start}~{comp_end} ({promo_total_days}일)")
 
-        # 토큰 1회 발급
+        # 토큰 1회 발급 (행사/비교 기간 모두 재사용)
         try:
             token = _get_access_token(client_id, client_secret)
         except Exception as e:
             print(f"  [오류] 인증 실패: {e}")
-            batch_updates.append({"range": f"F{sheet_row}", "values": [[comp_period_str]]})
+            batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
-        headers = {"Authorization": f"Bearer {token}"}
+        headers_auth = {"Authorization": f"Bearer {token}"}
 
-        # ── 행사기간 매출 (병렬 조회) ────────────────────
+        # ── 행사기간 매출 조회 ────────────────────────────
         print(f"  ▷ 행사기간 매출 조회 중...")
         try:
             promo_raw = get_period_sales(
-                headers,
+                headers_auth,
                 promo_start.strftime("%Y-%m-%d"),
                 promo_actual_end.strftime("%Y-%m-%d"),
             )
         except Exception as e:
             print(f"  [오류] 행사매출 조회 실패: {e}")
-            batch_updates.append({"range": f"F{sheet_row}", "values": [[comp_period_str]]})
+            batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
-        # 기존 셀의 개별 공제 목록 추출 (캠페인 삭제 후에도 보존하기 위해)
-        existing_promo_ded = get_existing_deductions_list(row[3] if len(row) > 3 else "")
-        existing_comp_ded  = get_existing_deductions_list(row[6] if len(row) > 6 else "")
-
-        # 현재 활성 캠페인 공제 목록
+        # 행사기간 공구 공제
         print(f"  ▷ 행사기간 공구 공제 계산 중...")
-        active_promo = calc_gugu_deductions_list(headers, store_raw, promo_start, promo_actual_end)
+        existing_promo_ded = get_existing_deductions_list(row[4] if len(row) > 4 else "")  # E열
+        active_promo       = calc_gugu_deductions_list(headers_auth, store_raw, promo_start, promo_actual_end)
+        promo_deductions   = merge_deductions(existing_promo_ded, active_promo)
 
-        # ── 비교기간 매출 (같은 토큰) ─────────────────────
+        # ── 비교기간 매출 조회 (같은 토큰) ───────────────
         print(f"  ▷ 비교기간 매출 조회 중...")
         try:
             comp_raw = get_period_sales(
-                headers,
+                headers_auth,
                 comp_start.strftime("%Y-%m-%d"),
                 comp_end.strftime("%Y-%m-%d"),
             )
         except Exception as e:
             print(f"  [오류] 비교매출 조회 실패: {e}")
-            batch_updates.append({"range": f"F{sheet_row}", "values": [[comp_period_str]]})
+            batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
+        # 비교기간 공구 공제
         print(f"  ▷ 비교기간 공구 공제 계산 중...")
-        active_comp = calc_gugu_deductions_list(headers, store_raw, comp_start, comp_end)
-
-        # 병합: 기존 공제 보존 + 신규 공제 추가 (삭제된 캠페인 공제도 유지)
-        promo_deductions = merge_deductions(existing_promo_ded, active_promo)
-        comp_deductions  = merge_deductions(existing_comp_ded,  active_comp)
+        existing_comp_ded = get_existing_deductions_list(row[7] if len(row) > 7 else "")   # H열
+        active_comp       = calc_gugu_deductions_list(headers_auth, store_raw, comp_start, comp_end)
+        comp_deductions   = merge_deductions(existing_comp_ded, active_comp)
 
         promo_net = promo_raw - sum(promo_deductions)
         comp_net  = comp_raw  - sum(comp_deductions)
 
         print(f"  행사: {promo_raw:,}원 - 공구 {sum(promo_deductions):,}원 = {promo_net:,}원")
         print(f"  비교: {comp_raw:,}원 - 공구 {sum(comp_deductions):,}원 = {comp_net:,}원")
-        print(f"  증감: {promo_net - comp_net:+,}원")
 
         # ── 셀 수식 구성 ───────────────────────────────────
-        d_val = make_formula(promo_raw, promo_deductions)
-        g_val = make_formula(comp_raw,  comp_deductions)
+        e_val = make_formula(promo_raw, promo_deductions)   # E: 행사기간매출
+        f_val = f"=E{sheet_row}/{elapsed_days}"             # F: 행사일평균
+        h_val = make_formula(comp_raw, comp_deductions)     # H: 비교매출
+        i_val = f"=H{sheet_row}/{promo_total_days}"         # I: 비교일평균
+        j_val = f"=F{sheet_row}-I{sheet_row}"               # J: 일평균증감 (항상 표시)
 
-        # E, H: 일평균
-        e_val = f"=D{sheet_row}/{elapsed_days}"
-        h_val = f"=G{sheet_row}/{promo_total_days}"
+        is_ended = promo_end < today
+        remaining_days = (promo_end - promo_actual_end).days
 
-        # I: 행사 종료 후에만 총합 비교 (인센티브 정산용)
-        # 진행 중에는 비워둠 → 마이너스 노출로 사기 저하 방지
-        if promo_end < today:
-            i_val = f"=D{sheet_row}-G{sheet_row}"
+        if not is_ended:
+            # 행사 진행 중: 예상매출/예상증감 표시, 최종증감 비워둠
+            k_val = f"=F{sheet_row}*{promo_total_days}"   # K: 예상행사매출
+            l_val = f"=K{sheet_row}-H{sheet_row}"          # L: 예상증감
+            m_val = ""                                      # M: 최종증감 (종료후)
+            print(f"  일평균증감: {promo_net//elapsed_days - comp_net//promo_total_days:+,}원/일 | 예상({remaining_days}일 남음)")
         else:
-            i_val = ""
+            # 행사 종료: 최종증감 표시, 예상 비워둠
+            k_val = ""
+            l_val = ""
+            m_val = f"=E{sheet_row}-H{sheet_row}"          # M: 최종증감 (인센티브 정산용)
+            print(f"  최종증감: {promo_net - comp_net:+,}원")
 
-        # K열: 집계기간 ("4.28~5.8 (10일)")
-        period_text = (f"{promo_start.month}.{promo_start.day}"
-                       f"~{promo_actual_end.month}.{promo_actual_end.day}"
-                       f" ({elapsed_days}일)")
-
-        # L열 이후: 행사 진행 중일 때 예상 매출 표기
-        # 현재 일평균이 종료일까지 유지된다고 가정
-        # 예상 행사매출 = E열(일평균) × 총행사일수
-        # 예상 증감 = 예상행사매출 - G열(비교매출)
-        if promo_end >= today:   # 진행 중
-            projected_val    = f"=E{sheet_row}*{promo_total_days}"  # 예상 행사매출
-            projected_diff   = f"=M{sheet_row}-G{sheet_row}"         # 예상 증감
-            remaining_days   = (promo_end - promo_actual_end).days
-            projected_label  = f"예상({remaining_days}일 남음)"
-        else:
-            projected_val   = ""
-            projected_diff  = ""
-            projected_label = ""
-
+        # D~M 한 번에 기입 (10개 열)
         batch_updates.append({
-            "range": f"D{sheet_row}:I{sheet_row}",
-            "values": [[d_val, e_val, comp_period_str, g_val, h_val, i_val]],
-        })
-        batch_updates.append({
-            "range": f"K{sheet_row}:O{sheet_row}",
-            "values": [[period_text, "",
-                        projected_val, projected_diff, projected_label]],
+            "range": f"D{sheet_row}:M{sheet_row}",
+            "values": [[
+                period_text,      # D: 집계기간
+                e_val,            # E: 행사기간매출
+                f_val,            # F: 행사일평균
+                comp_period_str,  # G: 비교일자
+                h_val,            # H: 비교매출
+                i_val,            # I: 비교일평균
+                j_val,            # J: 일평균증감 (항상)
+                k_val,            # K: 예상행사매출 (진행중)
+                l_val,            # L: 예상증감 (진행중)
+                m_val,            # M: 최종증감 (종료후)
+            ]],
         })
 
+    # 헤더 + 업데이트 시간 기재
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    batch_updates.append({"range": "K1:O1", "values": [[
+    batch_updates.append({"range": "D1:O1", "values": [[
         "집계기간",
-        f"업데이트: {update_time}",
+        "행사기간매출(공구제외)",
+        "행사 일평균",
+        "비교일자",
+        "비교매출(공구제외)",
+        "비교 일평균",
+        "★ 일평균증감(행사-비교)",
         "예상행사매출(일평균유지시)",
-        "예상증감(예상-비교)",
-        "비고",
+        "예상증감",
+        "최종증감(종료후/인센티브)",
+        "",              # N1: 채널 헤더는 직원이 직접 관리
+        f"업데이트: {update_time}",   # O1
     ]]})
 
     if batch_updates:
