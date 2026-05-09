@@ -180,9 +180,65 @@ def _query_one_day(headers: dict, date_dt: datetime,
     return day_total
 
 
+def _query_full_period(headers: dict, date_from: str, date_to: str,
+                       product_no: str) -> int:
+    """특정 상품번호의 전체 기간 매출 한 번에 조회 (페이지네이션)."""
+    start_dt  = datetime.strptime(date_from, "%Y-%m-%d")
+    end_dt    = datetime.strptime(date_to,   "%Y-%m-%d")
+    yesterday = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
+    actual_end = min(end_dt, yesterday)
+
+    from_str = start_dt.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+    to_str   = (actual_end + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+
+    total = 0
+    page  = 1
+    while True:
+        url = (
+            f"{NAVER_BASE}/external/v1/pay-order/seller/product-orders"
+            f"?from={from_str}&to={to_str}"
+            f"&rangeType=PAYED_DATETIME&pageSize=300&page={page}"
+        )
+        for attempt in range(3):
+            resp = requests.get(url, headers=headers, timeout=60)
+            if resp.status_code == 429:
+                time.sleep(5 * (attempt + 1))
+            else:
+                break
+
+        if resp.status_code == 400:
+            raise ValueError("24시간 제한")
+        if resp.status_code != 200:
+            print(f"    [API 오류] {resp.status_code}")
+            break
+
+        data     = resp.json().get("data", {})
+        contents = data.get("contents", [])
+        for item in contents:
+            po = item.get("content", {}).get("productOrder", {})
+            if po.get("productOrderStatus", "") not in SALE_STATUSES:
+                continue
+            if str(po.get("productId", "")) != str(product_no):
+                continue
+            amount = po.get("totalPaymentAmount") or po.get("paymentAmount")
+            if not amount:
+                amount = int(po.get("quantity") or 1) * int(po.get("unitPrice") or 0)
+            total += int(amount)
+
+        if not data.get("pagination", {}).get("hasNext", False):
+            break
+        page += 1
+
+    return total
+
+
 def get_period_sales(headers: dict, date_from: str, date_to: str,
                      product_no: str = None) -> int:
-    """기간 매출 합산. 하루씩 순차 조회 (네이버 API 24시간 제한)."""
+    """
+    기간 매출 합산.
+    - 특정 상품: 전체 기간 한 번에 조회 시도 (빠름)
+    - 전체 스토어: 하루씩 순차 조회 (API 24시간 제한)
+    """
     yesterday  = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
     start_dt   = datetime.strptime(date_from, "%Y-%m-%d")
     actual_end = min(datetime.strptime(date_to, "%Y-%m-%d"), yesterday)
@@ -190,11 +246,22 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
     if start_dt > actual_end:
         return 0
 
+    # 상품번호 지정 시: 전체 기간 한 번에 조회 시도
+    if product_no:
+        try:
+            total = _query_full_period(headers, date_from, date_to, product_no)
+            print(f"    합계: {total:,}원 ({date_from}~{date_to[:7]})")
+            return total
+        except ValueError:
+            pass   # 24시간 제한 오류 → 일별 조회로 폴백
+
+    # 전체 스토어 또는 폴백: 하루씩 순차 조회
     total = 0
     d = start_dt
     while d <= actual_end:
         day_total = _query_one_day(headers, d, product_no)
-        print(f"    {d.strftime('%m/%d')}: {day_total:,}원")
+        if day_total > 0:   # 0원인 날은 출력 생략
+            print(f"    {d.strftime('%m/%d')}: {day_total:,}원")
         total += day_total
         d += timedelta(days=1)
 
