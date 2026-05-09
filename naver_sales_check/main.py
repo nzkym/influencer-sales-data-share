@@ -460,22 +460,28 @@ def run_once():
         d_val = make_formula(promo_raw, promo_deductions)
         g_val = make_formula(comp_raw,  comp_deductions)
 
-        # E, H, I: D·G 셀 참조 수식 → D·G 변경 시 자동 반영
+        # E, H: 일평균 (D·G 셀 참조)
         e_val = f"=D{sheet_row}/{elapsed_days}"
         h_val = f"=G{sheet_row}/{promo_total_days}"
-        i_val = f"=D{sheet_row}-G{sheet_row}"
+        # I: 일평균 증감 (E-H) → 진행 중에도 공정한 비교, 행사 효과 즉시 확인
+        i_val = f"=E{sheet_row}-H{sheet_row}"
 
         batch_updates.append({
             "range": f"D{sheet_row}:I{sheet_row}",
             "values": [[d_val, e_val, comp_period_str, g_val, h_val, i_val]],
         })
 
+    # 마지막 업데이트 시간 항상 기재 (K1셀)
+    update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
+    batch_updates.append({
+        "range": "K1",
+        "values": [[f"업데이트: {update_time}"]],
+    })
+
     if batch_updates:
-        # USER_ENTERED: = 시작 값을 수식으로 해석
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
-        # 콤마 서식 적용
         _apply_number_format(spreadsheet, ws, len(all_values))
-        print(f"\n✅ {len(batch_updates)}개 행 업데이트 완료")
+        print(f"\n✅ 업데이트 완료 ({update_time})")
     else:
         print("\n업데이트할 행이 없습니다.")
 

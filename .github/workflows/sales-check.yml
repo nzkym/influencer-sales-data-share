@@ -1,9 +1,7 @@
 name: 행사 매출증감 확인 (매일 오전 9시)
 
 on:
-  schedule:
-    - cron: '0 0 * * *'   # 매일 00:00 UTC = 09:00 KST
-  workflow_dispatch:        # GitHub 웹에서 수동 실행 가능
+  workflow_dispatch:   # 수동 실행만 허용 (자동 스케줄 중단 - VM cron으로 대체)
 
 jobs:
   check:
