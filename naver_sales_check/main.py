@@ -89,12 +89,13 @@ def _apply_number_format(spreadsheet, ws, data_rows: int):
             }},
             "fields": "userEnteredFormat.numberFormat",
         }})
-    # O열(14): 텍스트 서식 강제 + 배경 흰색 (상품번호가 숫자로 변환되지 않도록)
+    # O열(14): 전체 열을 텍스트 서식으로 고정 (1000행까지)
+    # → 상품번호를 콤마 구분으로 입력해도 숫자로 변환되지 않음
     R.append({"repeatCell": {
         "range": {
             "sheetId": ws.id,
             "startRowIndex": 0,
-            "endRowIndex": max(data_rows, 3),
+            "endRowIndex": 1000,
             "startColumnIndex": 14,
             "endColumnIndex": 15,
         },
