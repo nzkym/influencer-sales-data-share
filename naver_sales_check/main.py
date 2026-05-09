@@ -74,8 +74,8 @@ def _apply_number_format(spreadsheet, ws, data_rows: int):
     if data_rows < 2:
         return
     R = []
-    # 숫자 서식: D E F G I J L M
-    for col_idx in [3, 4, 5, 6, 8, 9, 11, 12]:
+    # 숫자 서식: D E F G I J L M P Q (결제자수 포함)
+    for col_idx in [3, 4, 5, 6, 8, 9, 11, 12, 15, 16]:
         R.append({"repeatCell": {
             "range": {
                 "sheetId": ws.id,
@@ -133,13 +133,14 @@ def _get_access_token(client_id: str, client_secret: str) -> str:
 
 
 def _query_one_day(headers: dict, date_dt: datetime,
-                   product_no: str = None) -> int:
-    """하루치 매출 합산 (페이지네이션 포함). 네이버 API 24시간 제한 대응."""
+                   product_no: str = None) -> tuple:
+    """하루치 (매출합산, 결제건수) 반환. 네이버 API 24시간 제한 대응."""
     next_day = date_dt + timedelta(days=1)
     from_str = date_dt.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
     to_str   = next_day.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
 
     day_total = 0
+    day_count = 0
     page = 1
     while True:
         url = (
@@ -172,17 +173,18 @@ def _query_one_day(headers: dict, date_dt: datetime,
             if not amount:
                 amount = int(po.get("quantity") or 1) * int(po.get("unitPrice") or 0)
             day_total += int(amount)
+            day_count += 1
 
         if not data.get("pagination", {}).get("hasNext", False):
             break
         page += 1
 
-    return day_total
+    return day_total, day_count
 
 
 def _query_full_period(headers: dict, date_from: str, date_to: str,
-                       product_no: str) -> int:
-    """특정 상품번호의 전체 기간 매출 한 번에 조회 (페이지네이션)."""
+                       product_no: str) -> tuple:
+    """특정 상품번호의 전체 기간 (매출합산, 결제건수) 한 번에 조회."""
     start_dt  = datetime.strptime(date_from, "%Y-%m-%d")
     end_dt    = datetime.strptime(date_to,   "%Y-%m-%d")
     yesterday = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
@@ -192,6 +194,7 @@ def _query_full_period(headers: dict, date_from: str, date_to: str,
     to_str   = (actual_end + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
 
     total = 0
+    count = 0
     page  = 1
     while True:
         url = (
@@ -224,19 +227,20 @@ def _query_full_period(headers: dict, date_from: str, date_to: str,
             if not amount:
                 amount = int(po.get("quantity") or 1) * int(po.get("unitPrice") or 0)
             total += int(amount)
+            count += 1
 
         if not data.get("pagination", {}).get("hasNext", False):
             break
         page += 1
 
-    return total
+    return total, count
 
 
 def get_period_sales(headers: dict, date_from: str, date_to: str,
-                     product_no: str = None) -> int:
+                     product_no: str = None) -> tuple:
     """
-    기간 매출 합산.
-    - 특정 상품: 전체 기간 한 번에 조회 시도 (빠름)
+    기간 (매출합산, 결제건수) 반환.
+    - 특정 상품: 전체 기간 한 번에 조회 (빠름)
     - 전체 스토어: 하루씩 순차 조회 (API 24시간 제한)
     """
     yesterday  = datetime.now(KST).replace(tzinfo=None) - timedelta(days=1)
@@ -244,28 +248,30 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
     actual_end = min(datetime.strptime(date_to, "%Y-%m-%d"), yesterday)
 
     if start_dt > actual_end:
-        return 0
+        return 0, 0
 
     # 상품번호 지정 시: 전체 기간 한 번에 조회 시도
     if product_no:
         try:
-            total = _query_full_period(headers, date_from, date_to, product_no)
-            print(f"    합계: {total:,}원 ({date_from}~{date_to[:7]})")
-            return total
+            total, count = _query_full_period(headers, date_from, date_to, product_no)
+            print(f"    합계: {total:,}원 / {count}건")
+            return total, count
         except ValueError:
-            pass   # 24시간 제한 오류 → 일별 조회로 폴백
+            pass   # 24시간 제한 → 일별 조회로 폴백
 
     # 전체 스토어 또는 폴백: 하루씩 순차 조회
     total = 0
+    count = 0
     d = start_dt
     while d <= actual_end:
-        day_total = _query_one_day(headers, d, product_no)
-        if day_total > 0:   # 0원인 날은 출력 생략
-            print(f"    {d.strftime('%m/%d')}: {day_total:,}원")
+        day_total, day_count = _query_one_day(headers, d, product_no)
+        if day_total > 0:
+            print(f"    {d.strftime('%m/%d')}: {day_total:,}원 ({day_count}건)")
         total += day_total
+        count += day_count
         d += timedelta(days=1)
 
-    return total
+    return total, count
 
 
 # ── 공구 캠페인 공제 ──────────────────────────────────────
@@ -324,7 +330,7 @@ def calc_gugu_deductions_list(headers: dict, store: str,
         if ol_start > ol_end:
             continue
         print(f"    [공구] '{c['title']}' 겹침: {ol_start}~{ol_end}")
-        amount = get_period_sales(
+        amount, _ = get_period_sales(
             headers,
             ol_start.strftime("%Y-%m-%d"),
             ol_end.strftime("%Y-%m-%d"),
@@ -410,7 +416,7 @@ def calc_manual_deductions(headers: dict, product_ids: list,
     amounts = []
     for pid in product_ids:
         print(f"    [수동공제] 상품 {pid} 조회 중...")
-        amount = get_period_sales(headers, date_from, date_to, product_no=pid)
+        amount, _ = get_period_sales(headers, date_from, date_to, product_no=pid)
         print(f"    [수동공제] 상품 {pid}: {amount:,}원")
         if amount > 0:
             amounts.append(amount)
@@ -531,7 +537,7 @@ def run_once():
         # ── 행사기간 매출 조회 ────────────────────────────
         print(f"  ▷ 행사기간 매출 조회 중...")
         try:
-            promo_raw = get_period_sales(
+            promo_raw, promo_count = get_period_sales(
                 headers_auth,
                 promo_start.strftime("%Y-%m-%d"),
                 promo_actual_end.strftime("%Y-%m-%d"),
@@ -556,7 +562,7 @@ def run_once():
         # ── 비교기간 매출 조회 (같은 토큰) ───────────────
         print(f"  ▷ 비교기간 매출 조회 중...")
         try:
-            comp_raw = get_period_sales(
+            comp_raw, comp_count = get_period_sales(
                 headers_auth,
                 comp_start.strftime("%Y-%m-%d"),
                 comp_end.strftime("%Y-%m-%d"),
@@ -581,8 +587,8 @@ def run_once():
         promo_net = promo_raw - sum(promo_deductions)
         comp_net  = comp_raw  - sum(comp_deductions)
 
-        print(f"  행사: {promo_raw:,}원 - 공구 {sum(promo_deductions):,}원 = {promo_net:,}원")
-        print(f"  비교: {comp_raw:,}원 - 공구 {sum(comp_deductions):,}원 = {comp_net:,}원")
+        print(f"  행사: {promo_raw:,}원 ({promo_count}건) - 공구 {sum(promo_deductions):,}원 = {promo_net:,}원")
+        print(f"  비교: {comp_raw:,}원 ({comp_count}건) - 공구 {sum(comp_deductions):,}원 = {comp_net:,}원")
 
         # ── 셀 수식 구성 ───────────────────────────────────
         # 새 컬럼 순서: D(일평균증감) E(예상매출) F(예상증감) G(최종증감)
@@ -610,6 +616,12 @@ def run_once():
             g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 최종증감 (인센티브 정산용)
             print(f"  최종증감: {promo_net - comp_net:+,}원")
 
+        # P, Q열: 결제자수 기입
+        batch_updates.append({
+            "range": f"P{sheet_row}:Q{sheet_row}",
+            "values": [[promo_count, comp_count]],
+        })
+
         # D~M 한 번에 기입 (10개 열)
         batch_updates.append({
             "range": f"D{sheet_row}:M{sheet_row}",
@@ -628,9 +640,9 @@ def run_once():
         })
 
     # 헤더 + 업데이트 시간 기재
-    # 헤더는 직원이 자유롭게 수정 가능 — 프로그램은 업데이트 시간(P1)만 기록
+    # 헤더는 직원이 자유롭게 수정 가능 — 프로그램은 업데이트 시간(R1)만 기록
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    batch_updates.append({"range": "P1", "values": [[f"업데이트: {update_time}"]]})
+    batch_updates.append({"range": "R1", "values": [[f"업데이트: {update_time}"]]})
 
     if batch_updates:
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
