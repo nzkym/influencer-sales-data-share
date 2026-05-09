@@ -628,22 +628,9 @@ def run_once():
         })
 
     # 헤더 + 업데이트 시간 기재
+    # 헤더는 직원이 자유롭게 수정 가능 — 프로그램은 업데이트 시간(P1)만 기록
     update_time = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
-    batch_updates.append({"range": "D1:P1", "values": [[
-        "★일평균증감(행사-비교)",      # D
-        "예상행사매출(일평균유지시)",   # E
-        "예상증감(예상-비교)",          # F
-        "최종증감(종료후/인센티브)",    # G
-        "집계기간",                     # H
-        "행사기간매출(공구제외)",       # I
-        "행사 일평균",                  # J
-        "비교일자",                     # K
-        "비교매출(공구제외)",           # L
-        "비교 일평균",                  # M
-        "",                             # N: 채널 (직원 관리)
-        "공구상품ID(콤마구분입력)",     # O: 직원이 수동으로 상품번호 입력
-        f"업데이트: {update_time}",     # P
-    ]]})
+    batch_updates.append({"range": "P1", "values": [[f"업데이트: {update_time}"]]})
 
     if batch_updates:
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
