@@ -357,8 +357,11 @@ def write_to_sheet(
 
     data_end_row = len(values)
 
-    # 그래프용 보조 데이터
-    values.append(["", "", "", "", "", "", ""])
+    # 차트 공간 확보 (차트 높이 ~16행 + 여유 2행)
+    for _ in range(18):
+        values.append(["", "", "", "", "", "", ""])
+
+    # 그래프용 보조 데이터 (차트 아래)
     CHART_DATA_START = len(values)
     values.append(["날짜 (그래프용)", "주문수", "제품수"])
     for d in daily_totals:
