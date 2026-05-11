@@ -168,6 +168,7 @@ def load_campaigns() -> list:
             campaigns.append({
                 "title":      title,
                 "product_no": extract_product_no(url),
+                "url":        url,
                 "date_from":  start_date.strftime("%Y-%m-%d"),
                 "date_to":    end_date.strftime("%Y-%m-%d"),
                 "sheet_url":  sheet_url,
@@ -366,7 +367,7 @@ def run_once():
     for i, campaign in enumerate(campaigns, 1):
         print(f"[{i}/{len(campaigns)}] {campaign['title'][:45]}")
         try:
-            sales, _ = naver_api.get_sales_data(
+            sales, product_name = naver_api.get_sales_data(
                 client_id=campaign["api_id"],
                 client_secret=campaign["api_secret"],
                 product_no=campaign["product_no"],
@@ -378,6 +379,9 @@ def run_once():
                 product_title=campaign["title"],
                 sales_data=sales,
                 date_from=campaign["date_from"],
+                date_to=campaign["date_to"],
+                product_url=campaign.get("url", ""),
+                product_name=product_name,
                 inventory=campaign.get("inventory"),
             )
             product_no = campaign["product_no"]

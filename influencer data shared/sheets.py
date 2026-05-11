@@ -120,8 +120,9 @@ def read_totals_from_sheet(sheet_url: str) -> tuple:
     # 행1: 제품명 (A1)
     product_name = str(ws.acell("A1").value or "").replace("📊", "").strip()
 
-    # 행3: "총 주문수: N건  |  총 제품수: M개" (A3)
-    summary_cell = str(ws.acell("A3").value or "")
+    # A열에서 "총 주문수:" 포함 셀 탐색 (행 위치 무관하게)
+    a_col = ws.col_values(1)
+    summary_cell = next((v for v in a_col if "총 주문수:" in str(v)), "")
     orders_match = re.search(r"총 주문수:\s*([\d,]+)건", summary_cell)
     products_match = re.search(r"총 제품수:\s*([\d,]+)개", summary_cell)
 
@@ -237,9 +238,12 @@ def write_to_sheet(
     spreadsheet_url: str,
     product_title: str,
     sales_data: list,
-    date_from: str = "",    # "2026-04-06" 형식 (D+일 계산용)
-    unit_keyword: str = "", # 캠페인 시트의 "단위키워드" 열 값. 예: "bx", "박스", "BOX"
-    inventory: int = None,  # 초기 재고 수량. None이면 재고 표시 안 함
+    date_from: str = "",
+    date_to: str = "",
+    product_url: str = "",
+    product_name: str = "",
+    unit_keyword: str = "",
+    inventory: int = None,
 ):
     from datetime import timezone, timedelta, date as date_type
     KST = timezone(timedelta(hours=9))
@@ -290,7 +294,18 @@ def write_to_sheet(
     values.append(title_row)
     # 행2: 업데이트 시각
     values.append([f"마지막 업데이트: {updated_at}", "", "", "", "", ""])
-    # 행3: 총계 (+ 재고 정보 — 입력된 경우만)
+    # 행3: 진행기간
+    if date_from and date_to:
+        period = f"📅 진행기간: {_fmt_date(date_from)} ~ {_fmt_date(date_to)}"
+    else:
+        period = ""
+    values.append([period, "", "", "", "", ""])
+    # 행4: 상품링크
+    clean_url = product_url.split("?")[0] if product_url else ""
+    values.append([f"🔗 상품링크: {clean_url}" if clean_url else "", "", "", "", "", ""])
+    # 행5: 상품명
+    values.append([f"📦 상품명: {product_name}" if product_name else "", "", "", "", "", ""])
+    # 행6: 총계 (+ 재고 정보 — 입력된 경우만)
     remaining = None
     if inventory is not None:
         remaining = max(0, inventory - total_products)
@@ -309,7 +324,7 @@ def write_to_sheet(
     # 행6: 헤더
     values.append(["날짜", "옵션", "주문수", "제품수", "", "🏆 옵션별 순위", "총 주문수"])
 
-    DATA_START_ROW = 5  # 0-indexed
+    DATA_START_ROW = 8  # 0-indexed (행1~8: 정보행, 행9: 헤더)
 
     # 주문수가 모두 같은지 여부
     all_equal = len(set(v for _, v in ranked)) == 1
@@ -380,18 +395,18 @@ def write_to_sheet(
         "fields": "userEnteredFormat(horizontalAlignment)",
     }})
 
-    # 업데이트/누적 행 (행2~3)
+    # 정보 행 (행2~6: 업데이트·진행기간·상품링크·상품명·총계)
     R.append({"repeatCell": {
-        "range": cell_range(1, 0, 3, 7),
+        "range": cell_range(1, 0, 6, 7),
         "cell": {"userEnteredFormat": {
             "textFormat": {"bold": False, "fontSize": 10},
         }},
         "fields": "userEnteredFormat(textFormat)",
     }})
 
-    # 주의사항 행 (행4)
+    # 주의사항 행 (행7)
     R.append({"repeatCell": {
-        "range": cell_range(3, 0, 4, 7),
+        "range": cell_range(6, 0, 7, 7),
         "cell": {"userEnteredFormat": {
             "backgroundColor": COLOR_WARN_BG,
             "textFormat": {"italic": True, "fontSize": 9,
