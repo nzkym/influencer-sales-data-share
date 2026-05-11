@@ -300,9 +300,10 @@ def write_to_sheet(
     else:
         period = ""
     values.append([period, "", "", "", "", ""])
-    # 행4: 상품링크
+    # 행4: 상품링크 (하이퍼링크)
     clean_url = product_url.split("?")[0] if product_url else ""
-    values.append([f"🔗 상품링크: {clean_url}" if clean_url else "", "", "", "", "", ""])
+    link_formula = f'=HYPERLINK("{clean_url}","🔗 상품링크: {clean_url}")' if clean_url else ""
+    values.append([link_formula, "", "", "", "", ""])
     # 행5: 상품명
     values.append([f"📦 상품명: {product_name}" if product_name else "", "", "", "", "", ""])
     # 행6: 총계 (+ 재고 정보 — 입력된 경우만)
@@ -366,7 +367,7 @@ def write_to_sheet(
 
     # ── 시트 기록 ──────────────────────────────────────
     ws.clear()
-    ws.update("A1", values)
+    ws.update("A1", values, value_input_option="USER_ENTERED")
 
     # ── 서식 적용 ──────────────────────────────────────
     requests_body = {"requests": []}
@@ -555,7 +556,7 @@ def write_to_sheet(
                 "overlayPosition": {
                     "anchorCell": {
                         "sheetId": ws.id,
-                        "rowIndex": CHART_DATA_END + 2,
+                        "rowIndex": data_end_row + 1,
                         "columnIndex": 0,
                     },
                     "widthPixels": 520,
