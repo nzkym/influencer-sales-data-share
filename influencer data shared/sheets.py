@@ -400,29 +400,26 @@ def write_to_sheet(
             HOURLY_SECTION_TITLE_ROW = len(values)
             values.append(["⏰ 시간대별 판매 현황", "", "", "", "", "", ""])
 
-            # 차트 공간 (제목 바로 아래)
+            # 차트 공간 (차트 여기에 배치)
             HOURLY_CHART_ANCHOR = len(values)
             for _ in range(18):
                 values.append(["", "", "", "", "", "", ""])
 
-        # 📋 시간대별 상세 내역 + F열에 차트용 날짜+시간 레이블 포함
-        values.append(["", "", "", "", "", "", ""])
-        SIMPLE_TITLE_ROW = len(values)
-        values.append(["📋 시간대별 상세 내역", "", "", "", "", "", ""])
-        SIMPLE_HEADER_ROW = len(values)
-        # F열(index 5): 차트 도메인용 날짜+시간 레이블 (숨김 처리 예정)
-        values.append(["날짜", "시간", "주문수", "제품수", "", "", ""])
-        HOURLY_CHART_DATA_START = SIMPLE_HEADER_ROW
-        for date in dates_sorted:
-            d_obj = datetime.strptime(date, "%Y-%m-%d")
-            short_date = f"{d_obj.month}.{d_obj.day}일"
-            for hour in sorted(hourly_orders[date].keys()):
-                o = hourly_orders[date][hour]
-                p = hourly_products[date].get(hour, 0)
-                if o > 0:
-                    values.append([short_date, f"{hour}시", o, p, "",
-                                   f"{short_date} {hour}시", ""])
-        HOURLY_CHART_DATA_END = len(values)
+            # 차트 소스 겸 데이터 테이블 (단일, 중복 없음)
+            HOURLY_CHART_DATA_START = len(values)
+            values.append(["날짜+시간", "주문수", "제품수"])
+            for date in dates_sorted:
+                d_obj = datetime.strptime(date, "%Y-%m-%d")
+                short_date = f"{d_obj.month}.{d_obj.day}일"
+                for hour in sorted(hourly_orders[date].keys()):
+                    o = hourly_orders[date][hour]
+                    p = hourly_products[date].get(hour, 0)
+                    if o > 0:
+                        values.append([f"{short_date} {hour}시", o, p])
+            HOURLY_CHART_DATA_END = len(values)
+
+        SIMPLE_TITLE_ROW  = None
+        SIMPLE_HEADER_ROW = None
 
     # ── 시트 기록 ──────────────────────────────────────
     ws.clear()
@@ -683,12 +680,11 @@ def write_to_sheet(
                         {"position": "BOTTOM_AXIS", "title": "시간대"},
                         {"position": "LEFT_AXIS",   "title": "수량"},
                     ],
-                    # F열(index 5)을 도메인, C열(2)=주문수, D열(3)=제품수
                     "domains": [{"domain": {"sourceRange": {"sources": [{
                         "sheetId": ws.id,
                         "startRowIndex": HOURLY_CHART_DATA_START,
                         "endRowIndex":   HOURLY_CHART_DATA_END,
-                        "startColumnIndex": 5, "endColumnIndex": 6,
+                        "startColumnIndex": 0, "endColumnIndex": 1,
                     }]}}}],
                     "series": [
                         {
@@ -696,7 +692,7 @@ def write_to_sheet(
                                 "sheetId": ws.id,
                                 "startRowIndex": HOURLY_CHART_DATA_START,
                                 "endRowIndex":   HOURLY_CHART_DATA_END,
-                                "startColumnIndex": 2, "endColumnIndex": 3,
+                                "startColumnIndex": 1, "endColumnIndex": 2,
                             }]}},
                             "targetAxis": "LEFT_AXIS",
                             "color": {"red": 0.20, "green": 0.44, "blue": 0.78},
@@ -706,7 +702,7 @@ def write_to_sheet(
                                 "sheetId": ws.id,
                                 "startRowIndex": HOURLY_CHART_DATA_START,
                                 "endRowIndex":   HOURLY_CHART_DATA_END,
-                                "startColumnIndex": 3, "endColumnIndex": 4,
+                                "startColumnIndex": 2, "endColumnIndex": 3,
                             }]}},
                             "targetAxis": "LEFT_AXIS",
                             "color": {"red": 0.91, "green": 0.49, "blue": 0.14},
@@ -721,17 +717,6 @@ def write_to_sheet(
             }},
         }}})
 
-    # F열(index 5) 숨기기 — 차트 레이블용 열, 사용자 화면에서 불필요
-    if HOURLY_CHART_DATA_START is not None:
-        R.append({"updateDimensionProperties": {
-            "range": {
-                "sheetId": ws.id,
-                "dimension": "COLUMNS",
-                "startIndex": 5, "endIndex": 6,
-            },
-            "properties": {"hiddenByUser": True},
-            "fields": "hiddenByUser",
-        }})
 
     spreadsheet.batch_update(requests_body)
 
