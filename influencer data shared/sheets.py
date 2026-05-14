@@ -382,39 +382,49 @@ def write_to_sheet(
         values.append([_fmt_date(d["date"]), d["orders"], d["products"]])
     CHART_DATA_END = len(values)
 
-    # ── 시간대별 피벗 테이블 (차트 소스 데이터 아래) ────
+    # ── 시간대별 섹션 ────────────────────────────────────
     hourly_orders, hourly_products = _aggregate_hourly(sales_data)
     dates_sorted = sorted(hourly_orders.keys())
 
+    HOURLY_SECTION_TITLE_ROW = None
+    HOURLY_CHART_DATA_START   = None
+    HOURLY_CHART_DATA_END     = None
+    HOURLY_CHART_ANCHOR       = None
+    SIMPLE_TITLE_ROW          = None
+    SIMPLE_HEADER_ROW         = None
+
     if dates_sorted:
-        date_labels = [_fmt_date(d) for d in dates_sorted]
-
-        # 피벗 테이블
-        values.append(["", "", "", "", "", "", ""])
-        values.append(["⏰ 시간대별 판매 현황 (주문수 기준)", "", "", "", "", "", ""])
-        pivot_header = ["시간대"] + date_labels + ["합계"]
-        values.append(pivot_header)
-
-        all_hours = sorted({h for dh in hourly_orders.values() for h in dh})
-        for hour in all_hours:
-            row_vals = [f"{hour}시"]
-            row_total = 0
-            for date in dates_sorted:
-                cnt = hourly_orders[date].get(hour, 0)
-                row_vals.append(cnt if cnt else "")
-                row_total += cnt
-            row_vals.append(row_total)
-            values.append(row_vals)
-
-        col_totals = ["합계"]
+        # 시간대별 합계 (전체 기간)
+        h_orders   = defaultdict(int)
+        h_products = defaultdict(int)
         for date in dates_sorted:
-            col_totals.append(sum(hourly_orders[date].values()))
-        col_totals.append(sum(sum(dh.values()) for dh in hourly_orders.values()))
-        values.append(col_totals)
+            for hour, cnt in hourly_orders[date].items():
+                h_orders[hour]   += cnt
+                h_products[hour] += hourly_products[date].get(hour, 0)
+        active_hours = sorted(h_orders.keys())
 
-        # 단순 테이블
+        if active_hours:
+            values.append(["", "", "", "", "", "", ""])
+            HOURLY_SECTION_TITLE_ROW = len(values)
+            values.append(["⏰ 시간대별 판매 현황", "", "", "", "", "", ""])
+
+            # 차트 소스 데이터
+            HOURLY_CHART_DATA_START = len(values)
+            values.append(["시간대", "주문수", "제품수"])
+            for hour in active_hours:
+                values.append([f"{hour}시", h_orders[hour], h_products[hour]])
+            HOURLY_CHART_DATA_END = len(values)
+
+            # 시간대별 차트 공간
+            HOURLY_CHART_ANCHOR = len(values)
+            for _ in range(18):
+                values.append(["", "", "", "", "", "", ""])
+
+        # 📋 시간대별 상세 내역 (단순 테이블)
         values.append(["", "", "", "", "", "", ""])
+        SIMPLE_TITLE_ROW = len(values)
         values.append(["📋 시간대별 상세 내역", "", "", "", "", "", ""])
+        SIMPLE_HEADER_ROW = len(values)
         values.append(["날짜", "시간", "주문수", "제품수", "", "", ""])
         for date in dates_sorted:
             for hour in sorted(hourly_orders[date].keys()):
@@ -623,59 +633,95 @@ def write_to_sheet(
             },
         }}})
 
-    # ── 시간대별 섹션 서식 ─────────────────────────────
-    if dates_sorted:
-        COLOR_SECTION_BG = {"red": 0.18, "green": 0.18, "blue": 0.28}
-        COLOR_PIVOT_HDR  = {"red": 0.25, "green": 0.47, "blue": 0.78}
-        COLOR_TOTAL_BG   = {"red": 0.88, "green": 0.92, "blue": 1.0}
-        WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
-        BLACK = {"red": 0.0, "green": 0.0, "blue": 0.0}
+    # ── 시간대별 섹션 서식 (정확한 인덱스 기반) ──────────
+    COLOR_SECTION_BG = {"red": 0.18, "green": 0.18, "blue": 0.28}
+    COLOR_HDR        = {"red": 0.25, "green": 0.47, "blue": 0.78}
+    WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
 
-        # 섹션 제목 행들 찾기 (values에서 ⏰ 와 📋 로 시작하는 행 인덱스)
-        for idx, row in enumerate(values):
-            cell_val = str(row[0]) if row else ""
-            if cell_val.startswith("⏰") or cell_val.startswith("📋"):
-                R.append({"repeatCell": {
-                    "range": cell_range(idx, 0, idx + 1, 8),
-                    "cell": {"userEnteredFormat": {
-                        "backgroundColor": COLOR_SECTION_BG,
-                        "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": WHITE},
-                    }},
-                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
-                }})
-            elif cell_val == "시간대":
-                # 피벗 헤더
-                R.append({"repeatCell": {
-                    "range": cell_range(idx, 0, idx + 1, len(dates_sorted) + 2),
-                    "cell": {"userEnteredFormat": {
-                        "backgroundColor": COLOR_PIVOT_HDR,
-                        "textFormat": {"bold": True, "foregroundColor": WHITE},
-                        "horizontalAlignment": "CENTER",
-                    }},
-                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-                }})
-            elif cell_val == "합계" and idx > DATA_START_ROW:
-                # 합계 행
-                R.append({"repeatCell": {
-                    "range": cell_range(idx, 0, idx + 1, len(dates_sorted) + 2),
-                    "cell": {"userEnteredFormat": {
-                        "backgroundColor": COLOR_TOTAL_BG,
-                        "textFormat": {"bold": True, "foregroundColor": BLACK},
-                        "horizontalAlignment": "CENTER",
-                    }},
-                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-                }})
-            elif cell_val == "날짜" and idx > DATA_START_ROW:
-                # 단순 테이블 헤더
-                R.append({"repeatCell": {
-                    "range": cell_range(idx, 0, idx + 1, 4),
-                    "cell": {"userEnteredFormat": {
-                        "backgroundColor": COLOR_PIVOT_HDR,
-                        "textFormat": {"bold": True, "foregroundColor": WHITE},
-                        "horizontalAlignment": "CENTER",
-                    }},
-                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
-                }})
+    for title_row in [HOURLY_SECTION_TITLE_ROW, SIMPLE_TITLE_ROW]:
+        if title_row is not None:
+            R.append({"repeatCell": {
+                "range": cell_range(title_row, 0, title_row + 1, 8),
+                "cell": {"userEnteredFormat": {
+                    "backgroundColor": COLOR_SECTION_BG,
+                    "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": WHITE},
+                }},
+                "fields": "userEnteredFormat(backgroundColor,textFormat)",
+            }})
+
+    # 시간대별 차트 데이터 헤더
+    if HOURLY_CHART_DATA_START is not None:
+        R.append({"repeatCell": {
+            "range": cell_range(HOURLY_CHART_DATA_START, 0, HOURLY_CHART_DATA_START + 1, 3),
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": COLOR_HDR,
+                "textFormat": {"bold": True, "foregroundColor": WHITE},
+                "horizontalAlignment": "CENTER",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+        }})
+
+    # 단순 테이블 헤더
+    if SIMPLE_HEADER_ROW is not None:
+        R.append({"repeatCell": {
+            "range": cell_range(SIMPLE_HEADER_ROW, 0, SIMPLE_HEADER_ROW + 1, 4),
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": COLOR_HDR,
+                "textFormat": {"bold": True, "foregroundColor": WHITE},
+                "horizontalAlignment": "CENTER",
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+        }})
+
+    # ── 시간대별 차트 추가 ─────────────────────────────
+    if HOURLY_CHART_DATA_START is not None and HOURLY_CHART_ANCHOR is not None:
+        R.append({"addChart": {"chart": {
+            "spec": {
+                "title": "시간대별 주문수 / 제품수",
+                "titleTextFormat": {"bold": True, "fontSize": 12},
+                "basicChart": {
+                    "chartType": "COLUMN",
+                    "legendPosition": "BOTTOM_LEGEND",
+                    "axis": [
+                        {"position": "BOTTOM_AXIS", "title": "시간대"},
+                        {"position": "LEFT_AXIS",   "title": "수량"},
+                    ],
+                    "domains": [{"domain": {"sourceRange": {"sources": [{
+                        "sheetId": ws.id,
+                        "startRowIndex": HOURLY_CHART_DATA_START,
+                        "endRowIndex":   HOURLY_CHART_DATA_END,
+                        "startColumnIndex": 0, "endColumnIndex": 1,
+                    }]}}}],
+                    "series": [
+                        {
+                            "series": {"sourceRange": {"sources": [{
+                                "sheetId": ws.id,
+                                "startRowIndex": HOURLY_CHART_DATA_START,
+                                "endRowIndex":   HOURLY_CHART_DATA_END,
+                                "startColumnIndex": 1, "endColumnIndex": 2,
+                            }]}},
+                            "targetAxis": "LEFT_AXIS",
+                            "color": {"red": 0.20, "green": 0.44, "blue": 0.78},
+                        },
+                        {
+                            "series": {"sourceRange": {"sources": [{
+                                "sheetId": ws.id,
+                                "startRowIndex": HOURLY_CHART_DATA_START,
+                                "endRowIndex":   HOURLY_CHART_DATA_END,
+                                "startColumnIndex": 2, "endColumnIndex": 3,
+                            }]}},
+                            "targetAxis": "LEFT_AXIS",
+                            "color": {"red": 0.91, "green": 0.49, "blue": 0.14},
+                        },
+                    ],
+                    "headerCount": 1,
+                },
+            },
+            "position": {"overlayPosition": {
+                "anchorCell": {"sheetId": ws.id, "rowIndex": HOURLY_CHART_ANCHOR, "columnIndex": 0},
+                "widthPixels": 520, "heightPixels": 300,
+            }},
+        }}})
 
     spreadsheet.batch_update(requests_body)
 
