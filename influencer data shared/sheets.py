@@ -371,22 +371,30 @@ def write_to_sheet(
 
     data_end_row = len(values)
 
-    # ── 시간대별 피벗 테이블 ───────────────────────────
-    hourly_orders, hourly_products = _aggregate_hourly(aggregated_raw := sales_data)
+    # 차트 공간 확보 (차트 높이 ~16행 + 여유 2행)
+    for _ in range(18):
+        values.append(["", "", "", "", "", "", ""])
+
+    # 그래프용 보조 데이터 (차트 아래)
+    CHART_DATA_START = len(values)
+    values.append(["날짜 (그래프용)", "주문수", "제품수"])
+    for d in daily_totals:
+        values.append([_fmt_date(d["date"]), d["orders"], d["products"]])
+    CHART_DATA_END = len(values)
+
+    # ── 시간대별 피벗 테이블 (차트 소스 데이터 아래) ────
+    hourly_orders, hourly_products = _aggregate_hourly(sales_data)
     dates_sorted = sorted(hourly_orders.keys())
 
     if dates_sorted:
         date_labels = [_fmt_date(d) for d in dates_sorted]
 
-        # 섹션 제목
+        # 피벗 테이블
         values.append(["", "", "", "", "", "", ""])
-        values.append([f"⏰ 시간대별 판매 현황 (주문수 기준)", "", "", "", "", "", ""])
-
-        # 피벗 헤더
+        values.append(["⏰ 시간대별 판매 현황 (주문수 기준)", "", "", "", "", "", ""])
         pivot_header = ["시간대"] + date_labels + ["합계"]
         values.append(pivot_header)
 
-        # 주문이 있는 시간대만
         all_hours = sorted({h for dh in hourly_orders.values() for h in dh})
         for hour in all_hours:
             row_vals = [f"{hour}시"]
@@ -398,14 +406,13 @@ def write_to_sheet(
             row_vals.append(row_total)
             values.append(row_vals)
 
-        # 합계 행
         col_totals = ["합계"]
         for date in dates_sorted:
             col_totals.append(sum(hourly_orders[date].values()))
         col_totals.append(sum(sum(dh.values()) for dh in hourly_orders.values()))
         values.append(col_totals)
 
-        # ── 시간대별 단순 테이블 ───────────────────────
+        # 단순 테이블
         values.append(["", "", "", "", "", "", ""])
         values.append(["📋 시간대별 상세 내역", "", "", "", "", "", ""])
         values.append(["날짜", "시간", "주문수", "제품수", "", "", ""])
@@ -415,17 +422,6 @@ def write_to_sheet(
                 p = hourly_products[date].get(hour, 0)
                 if o > 0:
                     values.append([_fmt_date(date), f"{hour}시", o, p, "", "", ""])
-
-    # 차트 공간 확보 (차트 높이 ~16행 + 여유 2행)
-    for _ in range(18):
-        values.append(["", "", "", "", "", "", ""])
-
-    # 그래프용 보조 데이터 (차트 아래)
-    CHART_DATA_START = len(values)
-    values.append(["날짜 (그래프용)", "주문수", "제품수"])
-    for d in daily_totals:
-        values.append([_fmt_date(d["date"]), d["orders"], d["products"]])
-    CHART_DATA_END = len(values)
 
     # ── 시트 기록 ──────────────────────────────────────
     ws.clear()
