@@ -394,33 +394,29 @@ def write_to_sheet(
     SIMPLE_HEADER_ROW         = None
 
     if dates_sorted:
-        # 시간대별 합계 (전체 기간)
-        h_orders   = defaultdict(int)
-        h_products = defaultdict(int)
-        for date in dates_sorted:
-            for hour, cnt in hourly_orders[date].items():
-                h_orders[hour]   += cnt
-                h_products[hour] += hourly_products[date].get(hour, 0)
-        active_hours = sorted(h_orders.keys())
-
-        if active_hours:
+        has_hourly = any(hourly_orders[d] for d in dates_sorted)
+        if has_hourly:
             values.append(["", "", "", "", "", "", ""])
             HOURLY_SECTION_TITLE_ROW = len(values)
             values.append(["⏰ 시간대별 판매 현황", "", "", "", "", "", ""])
 
-            # 차트 소스 데이터
+            # 차트 소스: 날짜+시간 조합 (X축에 날짜별 시간대 모두 표시)
             HOURLY_CHART_DATA_START = len(values)
-            values.append(["시간대", "주문수", "제품수"])
-            for hour in active_hours:
-                values.append([f"{hour}시", h_orders[hour], h_products[hour]])
+            values.append(["날짜+시간", "주문수", "제품수"])
+            for date in dates_sorted:
+                for hour in sorted(hourly_orders[date].keys()):
+                    o = hourly_orders[date][hour]
+                    p = hourly_products[date].get(hour, 0)
+                    if o > 0:
+                        values.append([f"{_fmt_date(date)} {hour}시", o, p])
             HOURLY_CHART_DATA_END = len(values)
 
-            # 시간대별 차트 공간
+            # 시간대별 차트 공간 (차트가 여기에 배치됨)
             HOURLY_CHART_ANCHOR = len(values)
             for _ in range(18):
                 values.append(["", "", "", "", "", "", ""])
 
-        # 📋 시간대별 상세 내역 (단순 테이블)
+        # 📋 시간대별 상세 내역 (차트 아래)
         values.append(["", "", "", "", "", "", ""])
         SIMPLE_TITLE_ROW = len(values)
         values.append(["📋 시간대별 상세 내역", "", "", "", "", "", ""])
@@ -440,6 +436,12 @@ def write_to_sheet(
     # ── 서식 적용 ──────────────────────────────────────
     requests_body = {"requests": []}
     R = requests_body["requests"]
+
+    # 기존 서식 전체 초기화 (이전 실행 잔존 서식 제거)
+    R.append({"updateCells": {
+        "range": {"sheetId": ws.id},
+        "fields": "userEnteredFormat",
+    }})
 
     def cell_range(r1, c1, r2, c2):
         return {"sheetId": ws.id, "startRowIndex": r1, "endRowIndex": r2,
