@@ -152,9 +152,12 @@ def get_sales_data(
                 continue
             if po.get("productOrderStatus", "") not in SALE_STATUSES:
                 continue
+            pay_dt = order.get("paymentDate") or ""
+            hour = int(pay_dt[11:13]) if len(pay_dt) >= 13 and pay_dt[10:11] == "T" else 0
             matched.append({
                 "order_id": str(item.get("productOrderId", "")),
-                "date": (order.get("paymentDate") or "")[:10],
+                "date": pay_dt[:10],
+                "hour": hour,
                 "quantity": int(po.get("quantity") or 1),
             })
 
@@ -167,8 +170,9 @@ def get_sales_data(
         for m in matched:
             option = option_map.get(m["order_id"]) or "기본 옵션"
             result.append({
-                "date": m["date"],
-                "option": option,
+                "date":     m["date"],
+                "hour":     m["hour"],
+                "option":   option,
                 "quantity": m["quantity"],
             })
 

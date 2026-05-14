@@ -234,6 +234,20 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
         spreadsheet.batch_update(requests_body)
 
 
+def _aggregate_hourly(sales_data: list) -> tuple:
+    """시간대별 집계. 반환: (orders[date][hour], products[date][hour])"""
+    orders   = defaultdict(lambda: defaultdict(int))
+    products = defaultdict(lambda: defaultdict(int))
+    for row in sales_data:
+        date = row["date"]
+        hour = row.get("hour", 0)
+        qty  = row["quantity"]
+        box  = _extract_box_count(row.get("option", ""))
+        orders[date][hour]   += qty
+        products[date][hour] += qty * box
+    return orders, products
+
+
 def write_to_sheet(
     spreadsheet_url: str,
     product_title: str,
@@ -356,6 +370,51 @@ def write_to_sheet(
         values.append(["", "아직 판매 데이터가 없습니다", "", "", "", "", ""])
 
     data_end_row = len(values)
+
+    # ── 시간대별 피벗 테이블 ───────────────────────────
+    hourly_orders, hourly_products = _aggregate_hourly(aggregated_raw := sales_data)
+    dates_sorted = sorted(hourly_orders.keys())
+
+    if dates_sorted:
+        date_labels = [_fmt_date(d) for d in dates_sorted]
+
+        # 섹션 제목
+        values.append(["", "", "", "", "", "", ""])
+        values.append([f"⏰ 시간대별 판매 현황 (주문수 기준)", "", "", "", "", "", ""])
+
+        # 피벗 헤더
+        pivot_header = ["시간대"] + date_labels + ["합계"]
+        values.append(pivot_header)
+
+        # 주문이 있는 시간대만
+        all_hours = sorted({h for dh in hourly_orders.values() for h in dh})
+        for hour in all_hours:
+            row_vals = [f"{hour}시"]
+            row_total = 0
+            for date in dates_sorted:
+                cnt = hourly_orders[date].get(hour, 0)
+                row_vals.append(cnt if cnt else "")
+                row_total += cnt
+            row_vals.append(row_total)
+            values.append(row_vals)
+
+        # 합계 행
+        col_totals = ["합계"]
+        for date in dates_sorted:
+            col_totals.append(sum(hourly_orders[date].values()))
+        col_totals.append(sum(sum(dh.values()) for dh in hourly_orders.values()))
+        values.append(col_totals)
+
+        # ── 시간대별 단순 테이블 ───────────────────────
+        values.append(["", "", "", "", "", "", ""])
+        values.append(["📋 시간대별 상세 내역", "", "", "", "", "", ""])
+        values.append(["날짜", "시간", "주문수", "제품수", "", "", ""])
+        for date in dates_sorted:
+            for hour in sorted(hourly_orders[date].keys()):
+                o = hourly_orders[date][hour]
+                p = hourly_products[date].get(hour, 0)
+                if o > 0:
+                    values.append([_fmt_date(date), f"{hour}시", o, p, "", "", ""])
 
     # 차트 공간 확보 (차트 높이 ~16행 + 여유 2행)
     for _ in range(18):
@@ -567,6 +626,60 @@ def write_to_sheet(
                 }
             },
         }}})
+
+    # ── 시간대별 섹션 서식 ─────────────────────────────
+    if dates_sorted:
+        COLOR_SECTION_BG = {"red": 0.18, "green": 0.18, "blue": 0.28}
+        COLOR_PIVOT_HDR  = {"red": 0.25, "green": 0.47, "blue": 0.78}
+        COLOR_TOTAL_BG   = {"red": 0.88, "green": 0.92, "blue": 1.0}
+        WHITE = {"red": 1.0, "green": 1.0, "blue": 1.0}
+        BLACK = {"red": 0.0, "green": 0.0, "blue": 0.0}
+
+        # 섹션 제목 행들 찾기 (values에서 ⏰ 와 📋 로 시작하는 행 인덱스)
+        for idx, row in enumerate(values):
+            cell_val = str(row[0]) if row else ""
+            if cell_val.startswith("⏰") or cell_val.startswith("📋"):
+                R.append({"repeatCell": {
+                    "range": cell_range(idx, 0, idx + 1, 8),
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": COLOR_SECTION_BG,
+                        "textFormat": {"bold": True, "fontSize": 11, "foregroundColor": WHITE},
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat)",
+                }})
+            elif cell_val == "시간대":
+                # 피벗 헤더
+                R.append({"repeatCell": {
+                    "range": cell_range(idx, 0, idx + 1, len(dates_sorted) + 2),
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": COLOR_PIVOT_HDR,
+                        "textFormat": {"bold": True, "foregroundColor": WHITE},
+                        "horizontalAlignment": "CENTER",
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                }})
+            elif cell_val == "합계" and idx > DATA_START_ROW:
+                # 합계 행
+                R.append({"repeatCell": {
+                    "range": cell_range(idx, 0, idx + 1, len(dates_sorted) + 2),
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": COLOR_TOTAL_BG,
+                        "textFormat": {"bold": True, "foregroundColor": BLACK},
+                        "horizontalAlignment": "CENTER",
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                }})
+            elif cell_val == "날짜" and idx > DATA_START_ROW:
+                # 단순 테이블 헤더
+                R.append({"repeatCell": {
+                    "range": cell_range(idx, 0, idx + 1, 4),
+                    "cell": {"userEnteredFormat": {
+                        "backgroundColor": COLOR_PIVOT_HDR,
+                        "textFormat": {"bold": True, "foregroundColor": WHITE},
+                        "horizontalAlignment": "CENTER",
+                    }},
+                    "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
+                }})
 
     spreadsheet.batch_update(requests_body)
 
