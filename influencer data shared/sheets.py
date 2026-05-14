@@ -434,6 +434,19 @@ def write_to_sheet(
         "range": {"sheetId": ws.id},
         "fields": "userEnteredFormat",
     }})
+    # 숨겨진 행/열 전체 해제 (이전 실행 잔존 숨김 제거)
+    R.append({"updateDimensionProperties": {
+        "range": {"sheetId": ws.id, "dimension": "ROWS",
+                  "startIndex": 0, "endIndex": 500},
+        "properties": {"hiddenByUser": False},
+        "fields": "hiddenByUser",
+    }})
+    R.append({"updateDimensionProperties": {
+        "range": {"sheetId": ws.id, "dimension": "COLUMNS",
+                  "startIndex": 0, "endIndex": 20},
+        "properties": {"hiddenByUser": False},
+        "fields": "hiddenByUser",
+    }})
 
     def cell_range(r1, c1, r2, c2):
         return {"sheetId": ws.id, "startRowIndex": r1, "endRowIndex": r2,
