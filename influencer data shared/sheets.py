@@ -728,6 +728,19 @@ def write_to_sheet(
             }},
         }}})
 
+    # 차트 소스 데이터 행 숨기기 (중복 표시 방지, 차트는 정상 작동)
+    if HOURLY_CHART_DATA_START is not None and HOURLY_CHART_DATA_END is not None:
+        R.append({"updateDimensionProperties": {
+            "range": {
+                "sheetId": ws.id,
+                "dimension": "ROWS",
+                "startIndex": HOURLY_CHART_DATA_START,
+                "endIndex": HOURLY_CHART_DATA_END,
+            },
+            "properties": {"hiddenByUser": True},
+            "fields": "hiddenByUser",
+        }})
+
     spreadsheet.batch_update(requests_body)
 
     print(f"  → 구글 시트 업데이트 완료 ({len(aggregated)}행 + 그래프)")
