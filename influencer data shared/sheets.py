@@ -400,21 +400,24 @@ def write_to_sheet(
             HOURLY_SECTION_TITLE_ROW = len(values)
             values.append(["⏰ 시간대별 판매 현황", "", "", "", "", "", ""])
 
-            # 차트 소스: 날짜+시간 조합 (X축에 날짜별 시간대 모두 표시)
+            # 차트 공간 (제목 바로 아래 = row 39 위치)
+            HOURLY_CHART_ANCHOR = len(values)
+            for _ in range(18):
+                values.append(["", "", "", "", "", "", ""])
+
+            # 차트 소스 데이터 (차트 아래)
             HOURLY_CHART_DATA_START = len(values)
             values.append(["날짜+시간", "주문수", "제품수"])
             for date in dates_sorted:
+                # 연도 제거: "2026.5.11일" → "5.11일"
+                d_obj = datetime.strptime(date, "%Y-%m-%d")
+                short_date = f"{d_obj.month}.{d_obj.day}일"
                 for hour in sorted(hourly_orders[date].keys()):
                     o = hourly_orders[date][hour]
                     p = hourly_products[date].get(hour, 0)
                     if o > 0:
-                        values.append([f"{_fmt_date(date)} {hour}시", o, p])
+                        values.append([f"{short_date} {hour}시", o, p])
             HOURLY_CHART_DATA_END = len(values)
-
-            # 시간대별 차트 공간 (차트가 여기에 배치됨)
-            HOURLY_CHART_ANCHOR = len(values)
-            for _ in range(18):
-                values.append(["", "", "", "", "", "", ""])
 
         # 📋 시간대별 상세 내역 (차트 아래)
         values.append(["", "", "", "", "", "", ""])
@@ -721,7 +724,7 @@ def write_to_sheet(
             },
             "position": {"overlayPosition": {
                 "anchorCell": {"sheetId": ws.id, "rowIndex": HOURLY_CHART_ANCHOR, "columnIndex": 0},
-                "widthPixels": 520, "heightPixels": 300,
+                "widthPixels": 900, "heightPixels": 320,
             }},
         }}})
 
