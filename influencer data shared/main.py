@@ -544,15 +544,17 @@ def run_once():
     print(f"{'='*55}\n")
 
 
-def _run_pharmabros_if_needed():
+def _run_pharmabros_if_needed(force: bool = False):
     """
     파마브로스파일공유여부=파마브로스파일공유 캠페인을 찾아,
     현재 시각이 업로드 시간대(KST 10시/14시/16시)이면 실행.
+    force=True → 시간 체크 없이 즉시 실행 (테스트용)
     """
     global PHARMABROS_DRIVE_FOLDER_ID
 
     pb_campaigns = load_pharmabros_campaigns()
     if not pb_campaigns:
+        print("  [파마브로스] 대상 캠페인 없음 (K열 확인 필요)")
         return
 
     print(f"\n  [파마브로스] 대상 캠페인 {len(pb_campaigns)}개 확인")
@@ -563,12 +565,13 @@ def _run_pharmabros_if_needed():
         end_date   = campaign["date_to"]
         is_final   = campaign["is_final"]
 
-        run_flag, _ = pharmabros.should_run(start_date, end_date)
-        # is_final 캠페인이면 should_run이 True를 반환하는지 재확인
-        # (종료일 다음날 10시 조건)
-        if not run_flag:
-            print(f"  [파마브로스] '{title[:30]}' — 현재 시각은 업로드 시간대 아님, 스킵")
-            continue
+        if not force:
+            run_flag, _ = pharmabros.should_run(start_date, end_date)
+            if not run_flag:
+                print(f"  [파마브로스] '{title[:30]}' — 현재 시각은 업로드 시간대 아님, 스킵")
+                continue
+        else:
+            print(f"  [파마브로스] '{title[:30]}' — 강제 실행 모드 (시간 체크 무시)")
 
         try:
             # 드라이브 폴더 확인/생성 (최초 1회만 생성됨)
@@ -635,6 +638,12 @@ def _save_pharmabros_folder_id(folder_id: str):
 
 
 def main():
+    # 파마브로스 테스트 모드: 시간 체크 없이 파마브로스만 즉시 실행
+    if "--test-pharmabros" in sys.argv:
+        print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
+        _run_pharmabros_if_needed(force=True)
+        return
+
     # GitHub Actions 또는 --once 플래그: 1회 실행 후 종료
     if "--once" in sys.argv or os.getenv("GITHUB_ACTIONS"):
         run_once()
