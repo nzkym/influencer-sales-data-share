@@ -51,8 +51,11 @@ SCOPES = [
 
 SOLDOUT_NOTIFIED_FILE = BASE_DIR / "soldout_notified.json"
 
-# 파마브로스 파일공유 GCS 버킷명 (.env에 설정)
-PHARMABROS_GCS_BUCKET = os.getenv("PHARMABROS_GCS_BUCKET", "")
+# 파마브로스 파일공유 — 사장님 구글 계정 OAuth2 + Drive 폴더
+PHARMABROS_OAUTH_CLIENT_ID     = os.getenv("OAUTH_CLIENT_ID", "")
+PHARMABROS_OAUTH_CLIENT_SECRET = os.getenv("OAUTH_CLIENT_SECRET", "")
+PHARMABROS_OAUTH_REFRESH_TOKEN = os.getenv("OAUTH_REFRESH_TOKEN", "")
+PHARMABROS_DRIVE_FOLDER_ID     = os.getenv("PHARMABROS_DRIVE_FOLDER_ID", "")
 
 # 파마브로스파일공유 판별 함수 (띄어쓰기 무관)
 def _is_pharmabros(value: str) -> bool:
@@ -572,29 +575,35 @@ def _run_pharmabros_if_needed(force: bool = False):
             print(f"  [파마브로스] '{title[:30]}' — 강제 실행 모드 (시간 체크 무시)")
 
         try:
-            # GCS 버킷명 확인
-            if not PHARMABROS_GCS_BUCKET:
+            # OAuth2 토큰 + 폴더 ID 확인
+            if not all([PHARMABROS_OAUTH_CLIENT_ID,
+                        PHARMABROS_OAUTH_CLIENT_SECRET,
+                        PHARMABROS_OAUTH_REFRESH_TOKEN,
+                        PHARMABROS_DRIVE_FOLDER_ID]):
                 print(
-                    "  [파마브로스] ⚠️  .env에 PHARMABROS_GCS_BUCKET이 없습니다.\n"
-                    "    예) PHARMABROS_GCS_BUCKET=pharmabros-sales"
+                    "  [파마브로스] ⚠️  .env에 OAuth2 설정이 없습니다.\n"
+                    "  → get_drive_token.py 를 실행해서 토큰을 발급받으세요."
                 )
                 continue  # 기존 기능에 영향 없이 스킵
 
             folder_url, uploaded_urls = pharmabros.run_pharmabros(
                 campaign=campaign,
                 credentials_path=CREDENTIALS_PATH,
-                bucket_name=PHARMABROS_GCS_BUCKET,
-            )
-            # 업로드된 파일 목록 텍스트
-            files_text = "\n".join(
-                f"  📄 {name}" for name, _url in uploaded_urls
+                oauth_client_id=PHARMABROS_OAUTH_CLIENT_ID,
+                oauth_client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+                oauth_refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+                drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
             )
             label = "최종" if is_final else "중간"
+            # 파일명 + 다운로드 URL
+            files_text = "\n".join(
+                f"  📄 {name}\n  🔗 {url}" for name, url in uploaded_urls
+            )
             send_telegram(
                 f"✅ [파마브로스 {label} 업로드 완료]\n\n"
                 f"📦 캠페인: {title[:40]}\n"
                 f"📅 기간: {start_date} ~ {end_date}\n\n"
-                f"다운로드 파일:\n{files_text}\n\n"
+                f"⬇️ 다운로드 링크:\n{files_text}\n\n"
                 f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
         except Exception as e:

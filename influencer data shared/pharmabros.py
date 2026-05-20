@@ -21,8 +21,10 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from google.cloud import storage as gcs_storage
-from google.oauth2 import service_account
+from google.oauth2.credentials import Credentials as OAuthCredentials
+from google.auth.transport.requests import Request as AuthRequest
+from googleapiclient.discovery import build
+from googleapiclient.http import MediaIoBaseUpload
 
 # ── 한국시간 ──────────────────────────────────────────────
 KST = timezone(timedelta(hours=9))
@@ -187,35 +189,58 @@ def create_excel(
     return buf.getvalue()
 
 
-# ── Google Cloud Storage 업로드 ───────────────────────────
-def upload_to_gcs(
-    credentials_path: str,
-    bucket_name: str,
+# ── Google Drive 업로드 (OAuth2 — 사장님 계정 권한) ────────
+def _drive_service_oauth(client_id: str, client_secret: str, refresh_token: str):
+    """사장님 구글 계정 OAuth2 토큰으로 Drive 서비스 생성."""
+    creds = OAuthCredentials(
+        token=None,
+        refresh_token=refresh_token,
+        client_id=client_id,
+        client_secret=client_secret,
+        token_uri="https://oauth2.googleapis.com/token",
+    )
+    creds.refresh(AuthRequest())
+    return build("drive", "v3", credentials=creds, cache_discovery=False)
+
+
+def upload_to_drive(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    folder_id: str,
     file_bytes: bytes,
     file_name: str,
 ) -> str:
     """
-    GCS 버킷에 엑셀 파일 업로드 후 공개 다운로드 URL 반환.
+    사장님 구글 드라이브 폴더에 엑셀 파일 업로드.
     같은 이름 파일은 자동 덮어쓰기.
     """
-    creds = service_account.Credentials.from_service_account_file(
-        credentials_path,
-        scopes=["https://www.googleapis.com/auth/cloud-platform"],
+    service = _drive_service_oauth(client_id, client_secret, refresh_token)
+    media   = MediaIoBaseUpload(
+        io.BytesIO(file_bytes),
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
-    client = gcs_storage.Client(credentials=creds)
-    bucket = client.bucket(bucket_name)
-    blob   = bucket.blob(file_name)
 
-    blob.upload_from_string(
-        file_bytes,
-        content_type=(
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        ),
-    )
-    blob.make_public()
+    # 같은 이름 파일 검색
+    existing = service.files().list(
+        q=f"name='{file_name}' and '{folder_id}' in parents and trashed=false",
+        fields="files(id)",
+    ).execute().get("files", [])
 
-    print(f"  [GCS] 업로드 완료: {file_name}")
-    return blob.public_url
+    if existing:
+        file_id = existing[0]["id"]
+        service.files().update(fileId=file_id, media_body=media).execute()
+        print(f"  [Drive] 덮어쓰기: {file_name}")
+    else:
+        uploaded = service.files().create(
+            body={"name": file_name, "parents": [folder_id]},
+            media_body=media,
+            fields="id",
+        ).execute()
+        file_id = uploaded["id"]
+        print(f"  [Drive] 업로드 완료: {file_name}")
+
+    return f"https://drive.google.com/file/d/{file_id}/view"
 
 
 # ── 파일명 생성 ───────────────────────────────────────────
@@ -237,9 +262,16 @@ def make_filenames(is_final: bool, date_from: str, date_to: str) -> list[str]:
 
 
 # ── 메인 실행 함수 ────────────────────────────────────────
-def run_pharmabros(campaign: dict, credentials_path: str, bucket_name: str):
+def run_pharmabros(
+    campaign: dict,
+    credentials_path: str,
+    oauth_client_id: str,
+    oauth_client_secret: str,
+    oauth_refresh_token: str,
+    drive_folder_id: str,
+):
     """
-    파마브로스 판매현황 GCS 업로드 실행.
+    파마브로스 판매현황 구글 드라이브 업로드 실행 (사장님 계정 OAuth2).
     campaign 키: title, product_no, date_from, date_to, api_id, api_secret
     """
     import naver_api
@@ -279,14 +311,17 @@ def run_pharmabros(campaign: dict, credentials_path: str, bucket_name: str):
     # 파일명
     file_name = make_filenames(is_final, date_from, query_to)[0]
 
-    # GCS 업로드
-    file_url = upload_to_gcs(
-        credentials_path=credentials_path,
-        bucket_name=bucket_name,
+    # 구글 드라이브 업로드 (사장님 계정)
+    file_url = upload_to_drive(
+        client_id=oauth_client_id,
+        client_secret=oauth_client_secret,
+        refresh_token=oauth_refresh_token,
+        folder_id=drive_folder_id,
         file_bytes=excel_bytes,
         file_name=file_name,
     )
 
+    folder_url = f"https://drive.google.com/drive/folders/{drive_folder_id}"
     print(f"  [파마브로스] ✅ 업로드 완료: {file_name}")
-    print(f"  [파마브로스] 다운로드 URL: {file_url}")
-    return file_url, [(file_name, file_url)]
+    print(f"  [파마브로스] 폴더: {folder_url}")
+    return folder_url, [(file_name, file_url)]

@@ -1,8 +1,9 @@
 requests
 gspread
 google-auth
+google-auth-oauthlib
+google-api-python-client
 python-dotenv
 schedule
 bcrypt
 openpyxl
-google-cloud-storage
