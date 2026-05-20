@@ -41,6 +41,23 @@ def get_product_name(client_id: str, client_secret: str, product_no: str) -> str
 # 실제 판매로 집계할 주문 상태 (취소/반품 제외)
 SALE_STATUSES = {"PAYED", "DELIVERING", "DELIVERED", "PURCHASE_DECIDED"}
 
+# 주문 상태 한글 변환 (파마브로스 엑셀용)
+ORDER_STATUS_KO = {
+    "PAYMENT_WAITING":           "결제대기",
+    "PAYED":                     "결제완료",
+    "DELIVERING":                "배송중",
+    "DELIVERED":                 "배송완료",
+    "PURCHASE_DECIDED":          "구매확정",
+    "EXCHANGED":                 "교환완료",
+    "CANCEL_DONE":               "취소완료",
+    "RETURN_DONE":               "반품완료",
+    "PURCHASE_DECISION_HOLDBACK":"구매확정보류",
+    "DELIVERING_RETURNED":       "반송중",
+    "COLLECT_WAITED":            "수거대기",
+    "CANCEL_REQUESTED":          "취소요청",
+    "RETURN_INITIATED":          "반품신청",
+}
+
 
 def _get_access_token(client_id: str, client_secret: str) -> str:
     timestamp = str(int(time.time() * 1000))
@@ -181,3 +198,86 @@ def get_sales_data(
 
     print(f"  → 합계 {len(result)}건 수집 완료")
     return result, product_name
+
+
+def get_pharmabros_orders(
+    client_id: str,
+    client_secret: str,
+    product_no: str,
+    date_from: str,   # "2026-05-14"
+    date_to: str,     # "2026-05-20"
+) -> list:
+    """
+    파마브로스 파일공유용: 개별 주문 상세 목록 반환 (미집계 raw 데이터).
+    반환값: [
+        {
+            "주문번호": "2026051400000001",
+            "주문일시": "2026-05-14 14:23:11",
+            "주문상태": "배송중",
+            "옵션":     "선택: 3BOX(30%)",
+            "주문수량": 2,
+        }, ...
+    ]
+    ALL 상태 포함 (취소·반품 포함, 상태값 그대로 노출).
+    """
+    token = _get_access_token(client_id, client_secret)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    print(f"  → [파마브로스] 주문 상세 조회 (상품번호: {product_no}, 기간: {date_from} ~ {date_to})")
+
+    current = datetime.strptime(date_from, "%Y-%m-%d")
+    end     = datetime.strptime(date_to,   "%Y-%m-%d")
+    today   = datetime.now()
+
+    raw_orders = []   # {order_id, pay_dt, status, quantity}
+    while current <= min(end, today):
+        next_day = current + timedelta(days=1)
+        from_str = current.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+        to_str   = next_day.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+
+        day_items = _query_one_day(headers, from_str, to_str)
+        matched = 0
+        for item in day_items:
+            content = item.get("content", {})
+            po      = content.get("productOrder", {})
+            order   = content.get("order", {})
+
+            if str(po.get("productId", "")) != str(product_no):
+                continue
+
+            pay_dt = order.get("paymentDate") or ""
+            # paymentDate 형식: "2026-05-14T14:23:11+09:00" → "2026-05-14 14:23:11"
+            if "T" in pay_dt:
+                pay_dt_clean = pay_dt[:19].replace("T", " ")
+            else:
+                pay_dt_clean = pay_dt[:19]
+
+            raw_orders.append({
+                "order_id": str(item.get("productOrderId", "")),
+                "pay_dt":   pay_dt_clean,
+                "status":   po.get("productOrderStatus", ""),
+                "quantity": int(po.get("quantity") or 1),
+            })
+            matched += 1
+
+        print(f"  → {current.strftime('%Y-%m-%d')}: {matched}건")
+        current = next_day
+
+    # 옵션명 보완 (query 엔드포인트)
+    order_ids = [r["order_id"] for r in raw_orders]
+    option_map, _ = _get_option_names(headers, order_ids)
+
+    result = []
+    for r in raw_orders:
+        result.append({
+            "주문번호": r["order_id"],
+            "주문일시": r["pay_dt"],
+            "주문상태": ORDER_STATUS_KO.get(r["status"], r["status"]),
+            "옵션":     option_map.get(r["order_id"]) or "기본 옵션",
+            "주문수량": r["quantity"],
+        })
+
+    # 주문일시 오름차순 정렬
+    result.sort(key=lambda x: x["주문일시"])
+    print(f"  → [파마브로스] 합계 {len(result)}건 수집 완료")
+    return result

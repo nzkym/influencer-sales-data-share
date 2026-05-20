@@ -25,6 +25,7 @@ from google.oauth2.service_account import Credentials
 
 import naver_api
 import sheets
+import pharmabros
 
 # .env 로딩
 BASE_DIR = Path(__file__).parent
@@ -49,6 +50,16 @@ SCOPES = [
 ]
 
 SOLDOUT_NOTIFIED_FILE = BASE_DIR / "soldout_notified.json"
+
+# 파마브로스 파일공유 드라이브 폴더 ID (.env에 저장, 없으면 자동 생성)
+PHARMABROS_DRIVE_FOLDER_ID = os.getenv("PHARMABROS_DRIVE_FOLDER_ID", "")
+# 폴더 최초 생성 시 편집자 권한을 줄 사장님 이메일 (.env 또는 기본값)
+PHARMABROS_OWNER_EMAIL = os.getenv("PHARMABROS_OWNER_EMAIL", "hsbchong7@gmail.com")
+
+# 파마브로스파일공유 판별 함수 (띄어쓰기 무관)
+def _is_pharmabros(value: str) -> bool:
+    """K열 값이 '파마브로스파일공유'이면 True (공백 무시)."""
+    return re.sub(r"\s+", "", str(value)) == "파마브로스파일공유"
 
 
 def _load_soldout_notified() -> set:
@@ -178,6 +189,87 @@ def load_campaigns() -> list:
             })
         except Exception as e:
             print(f"  [경고] 행 파싱 오류: {e}")
+
+    return campaigns
+
+
+# ── 파마브로스 파일공유 캠페인 읽기 ──────────────────────
+def load_pharmabros_campaigns() -> list:
+    """
+    K열(파마브로스파일공유여부)이 '파마브로스파일공유'인 캠페인 반환.
+    - 진행 중인 캠페인 (start <= today <= end)
+    - 종료일 다음날 (end + 1일 == today) — 최종 업로드용
+
+    반환 캠페인에 is_final 키 추가:
+      is_final=True  → 종료 다음날 최종 업로드
+      is_final=False → 진행 중 중간 업로드
+    """
+    if not MASTER_SHEET_URL:
+        return []
+
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        spreadsheet = client.open_by_key(sheet_id)
+        gid_match = re.search(r"gid=(\d+)", MASTER_SHEET_URL)
+        if gid_match:
+            gid = int(gid_match.group(1))
+            ws = next(s for s in spreadsheet.worksheets() if s.id == gid)
+        else:
+            ws = spreadsheet.sheet1
+        rows = ws.get_all_records()
+    except Exception as e:
+        print(f"[오류] 파마브로스 캠페인 시트 읽기 실패: {e}")
+        return []
+
+    KST_zone = timezone(timedelta(hours=9))
+    today    = datetime.now(KST_zone).date()
+    campaigns = []
+
+    for row in rows:
+        try:
+            # K열: 파마브로스파일공유여부
+            pharmabros_flag = str(row.get("파마브로스파일공유여부") or "").strip()
+            if not _is_pharmabros(pharmabros_flag):
+                continue
+
+            title     = str(row.get("제목") or "").strip()
+            start_str = str(row.get("시작일자") or "").strip()
+            end_str   = str(row.get("종료일자") or "").strip()
+            url       = str(row.get("상품링크") or "").strip()
+            store     = str(row.get("스토어") or "").strip().lower()
+
+            if not all([title, start_str, end_str, url, store]):
+                continue
+            if store not in STORE_CREDENTIALS:
+                continue
+
+            api_id, api_secret = STORE_CREDENTIALS[store]
+            if not api_id or not api_secret:
+                continue
+
+            start_date = parse_date(start_str)
+            end_date   = parse_date(end_str)
+
+            is_active = start_date <= today <= end_date
+            is_final_day = (today == end_date + timedelta(days=1))
+
+            if not (is_active or is_final_day):
+                continue
+
+            campaigns.append({
+                "title":      title,
+                "product_no": extract_product_no(url),
+                "url":        url,
+                "date_from":  start_date.strftime("%Y-%m-%d"),
+                "date_to":    end_date.strftime("%Y-%m-%d"),
+                "api_id":     api_id,
+                "api_secret": api_secret,
+                "is_final":   is_final_day,
+            })
+        except Exception as e:
+            print(f"  [경고] 파마브로스 행 파싱 오류: {e}")
 
     return campaigns
 
@@ -445,7 +537,101 @@ def run_once():
             )
 
     update_summary_tab()
+
+    # ── 파마브로스 파일공유 ───────────────────────────────
+    _run_pharmabros_if_needed()
+
     print(f"{'='*55}\n")
+
+
+def _run_pharmabros_if_needed():
+    """
+    파마브로스파일공유여부=파마브로스파일공유 캠페인을 찾아,
+    현재 시각이 업로드 시간대(KST 10시/14시/16시)이면 실행.
+    """
+    global PHARMABROS_DRIVE_FOLDER_ID
+
+    pb_campaigns = load_pharmabros_campaigns()
+    if not pb_campaigns:
+        return
+
+    print(f"\n  [파마브로스] 대상 캠페인 {len(pb_campaigns)}개 확인")
+
+    for campaign in pb_campaigns:
+        title      = campaign["title"]
+        start_date = campaign["date_from"]
+        end_date   = campaign["date_to"]
+        is_final   = campaign["is_final"]
+
+        run_flag, _ = pharmabros.should_run(start_date, end_date)
+        # is_final 캠페인이면 should_run이 True를 반환하는지 재확인
+        # (종료일 다음날 10시 조건)
+        if not run_flag:
+            print(f"  [파마브로스] '{title[:30]}' — 현재 시각은 업로드 시간대 아님, 스킵")
+            continue
+
+        try:
+            # 드라이브 폴더 확인/생성 (최초 1회만 생성됨)
+            if not PHARMABROS_DRIVE_FOLDER_ID:
+                PHARMABROS_DRIVE_FOLDER_ID = pharmabros.ensure_folder(
+                    CREDENTIALS_PATH,
+                    owner_email=PHARMABROS_OWNER_EMAIL,
+                )
+                # .env에 저장하여 다음 실행 시 재사용
+                _save_pharmabros_folder_id(PHARMABROS_DRIVE_FOLDER_ID)
+
+            folder_url, uploaded_urls = pharmabros.run_pharmabros(
+                campaign=campaign,
+                credentials_path=CREDENTIALS_PATH,
+                folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+            )
+            # 업로드된 파일 목록 텍스트
+            files_text = "\n".join(
+                f"  📄 {name}" for name, _url in uploaded_urls
+            )
+            label = "최종" if is_final else "중간"
+            send_telegram(
+                f"✅ [파마브로스 {label} 업로드 완료]\n\n"
+                f"📦 캠페인: {title[:40]}\n"
+                f"📅 기간: {start_date} ~ {end_date}\n"
+                f"📁 공유 폴더: {folder_url}\n\n"
+                f"업로드된 파일:\n{files_text}\n\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+        except Exception as e:
+            print(f"  [파마브로스 오류] {e}")
+            send_telegram(
+                f"⚠️ [파마브로스 파일공유 오류]\n\n"
+                f"📦 캠페인: {title[:40]}\n"
+                f"❌ 오류: {str(e)[:200]}\n"
+                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
+            )
+
+
+def _save_pharmabros_folder_id(folder_id: str):
+    """생성된 드라이브 폴더 ID를 .env 파일에 저장."""
+    env_path = BASE_DIR / ".env"
+    try:
+        if env_path.exists():
+            content = env_path.read_text(encoding="utf-8")
+        else:
+            content = ""
+
+        if "PHARMABROS_DRIVE_FOLDER_ID" in content:
+            # 기존 값 교체
+            import re as _re
+            content = _re.sub(
+                r"PHARMABROS_DRIVE_FOLDER_ID=.*",
+                f"PHARMABROS_DRIVE_FOLDER_ID={folder_id}",
+                content,
+            )
+        else:
+            content = content.rstrip("\n") + f"\nPHARMABROS_DRIVE_FOLDER_ID={folder_id}\n"
+
+        env_path.write_text(content, encoding="utf-8")
+        print(f"  [파마브로스] 드라이브 폴더 ID 저장 완료: {folder_id}")
+    except Exception as e:
+        print(f"  [파마브로스] .env 저장 실패 (무시): {e}")
 
 
 def main():
