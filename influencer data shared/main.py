@@ -51,10 +51,8 @@ SCOPES = [
 
 SOLDOUT_NOTIFIED_FILE = BASE_DIR / "soldout_notified.json"
 
-# 파마브로스 파일공유 드라이브 폴더 ID (.env에 저장, 없으면 자동 생성)
-PHARMABROS_DRIVE_FOLDER_ID = os.getenv("PHARMABROS_DRIVE_FOLDER_ID", "")
-# 폴더 최초 생성 시 편집자 권한을 줄 사장님 이메일 (.env 또는 기본값)
-PHARMABROS_OWNER_EMAIL = os.getenv("PHARMABROS_OWNER_EMAIL", "hsbchong7@gmail.com")
+# 파마브로스 파일공유 GCS 버킷명 (.env에 설정)
+PHARMABROS_GCS_BUCKET = os.getenv("PHARMABROS_GCS_BUCKET", "")
 
 # 파마브로스파일공유 판별 함수 (띄어쓰기 무관)
 def _is_pharmabros(value: str) -> bool:
@@ -574,19 +572,18 @@ def _run_pharmabros_if_needed(force: bool = False):
             print(f"  [파마브로스] '{title[:30]}' — 강제 실행 모드 (시간 체크 무시)")
 
         try:
-            # 드라이브 폴더 확인/생성 (최초 1회만 생성됨)
-            if not PHARMABROS_DRIVE_FOLDER_ID:
-                PHARMABROS_DRIVE_FOLDER_ID = pharmabros.ensure_folder(
-                    CREDENTIALS_PATH,
-                    owner_email=PHARMABROS_OWNER_EMAIL,
+            # GCS 버킷명 확인
+            if not PHARMABROS_GCS_BUCKET:
+                print(
+                    "  [파마브로스] ⚠️  .env에 PHARMABROS_GCS_BUCKET이 없습니다.\n"
+                    "    예) PHARMABROS_GCS_BUCKET=pharmabros-sales"
                 )
-                # .env에 저장하여 다음 실행 시 재사용
-                _save_pharmabros_folder_id(PHARMABROS_DRIVE_FOLDER_ID)
+                continue  # 기존 기능에 영향 없이 스킵
 
             folder_url, uploaded_urls = pharmabros.run_pharmabros(
                 campaign=campaign,
                 credentials_path=CREDENTIALS_PATH,
-                folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+                bucket_name=PHARMABROS_GCS_BUCKET,
             )
             # 업로드된 파일 목록 텍스트
             files_text = "\n".join(
@@ -596,9 +593,8 @@ def _run_pharmabros_if_needed(force: bool = False):
             send_telegram(
                 f"✅ [파마브로스 {label} 업로드 완료]\n\n"
                 f"📦 캠페인: {title[:40]}\n"
-                f"📅 기간: {start_date} ~ {end_date}\n"
-                f"📁 공유 폴더: {folder_url}\n\n"
-                f"업로드된 파일:\n{files_text}\n\n"
+                f"📅 기간: {start_date} ~ {end_date}\n\n"
+                f"다운로드 파일:\n{files_text}\n\n"
                 f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
         except Exception as e:
@@ -609,32 +605,6 @@ def _run_pharmabros_if_needed(force: bool = False):
                 f"❌ 오류: {str(e)[:200]}\n"
                 f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
-
-
-def _save_pharmabros_folder_id(folder_id: str):
-    """생성된 드라이브 폴더 ID를 .env 파일에 저장."""
-    env_path = BASE_DIR / ".env"
-    try:
-        if env_path.exists():
-            content = env_path.read_text(encoding="utf-8")
-        else:
-            content = ""
-
-        if "PHARMABROS_DRIVE_FOLDER_ID" in content:
-            # 기존 값 교체
-            import re as _re
-            content = _re.sub(
-                r"PHARMABROS_DRIVE_FOLDER_ID=.*",
-                f"PHARMABROS_DRIVE_FOLDER_ID={folder_id}",
-                content,
-            )
-        else:
-            content = content.rstrip("\n") + f"\nPHARMABROS_DRIVE_FOLDER_ID={folder_id}\n"
-
-        env_path.write_text(content, encoding="utf-8")
-        print(f"  [파마브로스] 드라이브 폴더 ID 저장 완료: {folder_id}")
-    except Exception as e:
-        print(f"  [파마브로스] .env 저장 실패 (무시): {e}")
 
 
 def main():

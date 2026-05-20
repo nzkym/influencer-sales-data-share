@@ -21,9 +21,8 @@ import openpyxl
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
-from googleapiclient.discovery import build
-from googleapiclient.http import MediaIoBaseUpload
-from google.oauth2.service_account import Credentials
+from google.cloud import storage as gcs_storage
+from google.oauth2 import service_account
 
 # ── 한국시간 ──────────────────────────────────────────────
 KST = timezone(timedelta(hours=9))
@@ -188,129 +187,44 @@ def create_excel(
     return buf.getvalue()
 
 
-# ── 구글 드라이브 업로드 ──────────────────────────────────
-def _drive_service(credentials_path: str):
-    scopes = [
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/spreadsheets",
-    ]
-    creds = Credentials.from_service_account_file(credentials_path, scopes=scopes)
-    return build("drive", "v3", credentials=creds, cache_discovery=False)
-
-
-def ensure_folder(
+# ── Google Cloud Storage 업로드 ───────────────────────────
+def upload_to_gcs(
     credentials_path: str,
-    folder_name: str = "파마브로스 판매현황",
-    owner_email: str = "",
-) -> str:
-    """
-    구글 드라이브에 공유 폴더가 없으면 생성하고 folder_id를 반환합니다.
-    이미 있으면 기존 id를 반환합니다.
-
-    권한 자동 설정:
-      - '링크 있는 사람 누구나 뷰어'  → 거래처 담당자 다운로드용
-      - owner_email 지정 시 해당 계정에 편집자 권한 → 사장님 Drive에서 직접 확인 가능
-    """
-    service = _drive_service(credentials_path)
-
-    # 동일 이름 폴더 검색
-    results = service.files().list(
-        q=f"name='{folder_name}' and mimeType='application/vnd.google-apps.folder' and trashed=false",
-        fields="files(id, name)",
-    ).execute()
-    files = results.get("files", [])
-
-    if files:
-        folder_id = files[0]["id"]
-        print(f"  [Drive] 기존 폴더 사용: {folder_name} (id={folder_id})")
-    else:
-        # 폴더 생성
-        folder_meta = {
-            "name": folder_name,
-            "mimeType": "application/vnd.google-apps.folder",
-        }
-        folder = service.files().create(body=folder_meta, fields="id").execute()
-        folder_id = folder["id"]
-
-        # ① '링크 있는 사람 누구나 뷰어' → 거래처 담당자용
-        service.permissions().create(
-            fileId=folder_id,
-            body={"role": "reader", "type": "anyone"},
-        ).execute()
-
-        # ② 사장님 이메일에 편집자 권한 → 본인 Drive에서 확인 가능
-        if owner_email:
-            service.permissions().create(
-                fileId=folder_id,
-                body={"role": "writer", "type": "user", "emailAddress": owner_email},
-                sendNotificationEmail=False,
-            ).execute()
-            print(f"  [Drive] 사장님 계정 공유: {owner_email}")
-
-        folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-        print(f"  [Drive] 폴더 생성 완료: {folder_name}")
-        print(f"  [Drive] 공유 링크: {folder_url}")
-
-    return folder_id
-
-
-def upload_excel(
-    credentials_path: str,
-    folder_id: str,
+    bucket_name: str,
     file_bytes: bytes,
     file_name: str,
 ) -> str:
     """
-    엑셀 파일을 지정한 폴더에 업로드하고 파일 URL을 반환합니다.
-    같은 이름의 파일이 이미 있으면 덮어씁니다.
+    GCS 버킷에 엑셀 파일 업로드 후 공개 다운로드 URL 반환.
+    같은 이름 파일은 자동 덮어쓰기.
     """
-    service = _drive_service(credentials_path)
-
-    # 같은 이름 파일 검색 (폴더 내)
-    results = service.files().list(
-        q=f"name='{file_name}' and '{folder_id}' in parents and trashed=false",
-        fields="files(id, name)",
-    ).execute()
-    existing = results.get("files", [])
-
-    media = MediaIoBaseUpload(
-        io.BytesIO(file_bytes),
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    creds = service_account.Credentials.from_service_account_file(
+        credentials_path,
+        scopes=["https://www.googleapis.com/auth/cloud-platform"],
     )
+    client = gcs_storage.Client(credentials=creds)
+    bucket = client.bucket(bucket_name)
+    blob   = bucket.blob(file_name)
 
-    if existing:
-        # 덮어쓰기
-        file_id = existing[0]["id"]
-        service.files().update(
-            fileId=file_id,
-            media_body=media,
-        ).execute()
-        print(f"  [Drive] 파일 덮어쓰기: {file_name}")
-    else:
-        # 신규 업로드
-        file_meta = {"name": file_name, "parents": [folder_id]}
-        uploaded = service.files().create(
-            body=file_meta,
-            media_body=media,
-            fields="id",
-        ).execute()
-        file_id = uploaded["id"]
-        print(f"  [Drive] 파일 업로드 완료: {file_name}")
+    blob.upload_from_string(
+        file_bytes,
+        content_type=(
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        ),
+    )
+    blob.make_public()
 
-    return f"https://drive.google.com/file/d/{file_id}/view"
+    print(f"  [GCS] 업로드 완료: {file_name}")
+    return blob.public_url
 
 
 # ── 파일명 생성 ───────────────────────────────────────────
 def make_filenames(is_final: bool, date_from: str, date_to: str) -> list[str]:
     """
-    업로드할 파일명 목록 반환.
+    업로드할 파일명 목록 반환 (항상 1개).
 
-    정기 업로드 → 2개 파일:
-      1) 파마브로스_판매현황_최신.xlsx                    ← 항상 같은 이름으로 덮어쓰기
-      2) 파마브로스_판매현황_20260514~20260520_1400.xlsx  ← 날짜범위+시각 명시 (추가)
-
-    최종 업로드 → 1개 파일:
-      파마브로스_판매현황_최종_20260514~20260520.xlsx
+    정기 업로드: 파마브로스_판매현황_20260514~20260520_1400.xlsx
+    최종 업로드: 파마브로스_판매현황_최종_20260514~20260520.xlsx
     """
     d_from = date_from.replace("-", "")
     d_to   = date_to.replace("-", "")
@@ -318,16 +232,14 @@ def make_filenames(is_final: bool, date_from: str, date_to: str) -> list[str]:
     if is_final:
         return [f"파마브로스_판매현황_최종_{d_from}~{d_to}.xlsx"]
     else:
-        now   = now_kst()
-        hhmm  = now.strftime("%H%M")
-        dated = f"파마브로스_판매현황_{d_from}~{d_to}_{hhmm}.xlsx"
-        return ["파마브로스_판매현황_최신.xlsx", dated]
+        hhmm = now_kst().strftime("%H%M")
+        return [f"파마브로스_판매현황_{d_from}~{d_to}_{hhmm}.xlsx"]
 
 
 # ── 메인 실행 함수 ────────────────────────────────────────
-def run_pharmabros(campaign: dict, credentials_path: str, folder_id: str):
+def run_pharmabros(campaign: dict, credentials_path: str, bucket_name: str):
     """
-    파마브로스 판매현황 업로드 실행.
+    파마브로스 판매현황 GCS 업로드 실행.
     campaign 키: title, product_no, date_from, date_to, api_id, api_secret
     """
     import naver_api
@@ -364,23 +276,17 @@ def run_pharmabros(campaign: dict, credentials_path: str, folder_id: str):
         is_final=is_final,
     )
 
-    # 파일명 목록 생성
-    # 정기: ["파마브로스_판매현황_최신.xlsx", "파마브로스_판매현황_YYYYMMDD~YYYYMMDD_HHMM.xlsx"]
-    # 최종: ["파마브로스_판매현황_최종_YYYYMMDD~YYYYMMDD.xlsx"]
-    file_names = make_filenames(is_final, date_from, query_to)
+    # 파일명
+    file_name = make_filenames(is_final, date_from, query_to)[0]
 
-    # 드라이브 업로드 (파일명별로 각각 업로드)
-    uploaded_urls = []
-    for file_name in file_names:
-        file_url = upload_excel(
-            credentials_path=credentials_path,
-            folder_id=folder_id,
-            file_bytes=excel_bytes,
-            file_name=file_name,
-        )
-        uploaded_urls.append((file_name, file_url))
-        print(f"  [파마브로스] ✅ 업로드 완료: {file_name}")
-        print(f"  [파마브로스] 파일 URL: {file_url}")
+    # GCS 업로드
+    file_url = upload_to_gcs(
+        credentials_path=credentials_path,
+        bucket_name=bucket_name,
+        file_bytes=excel_bytes,
+        file_name=file_name,
+    )
 
-    folder_url = f"https://drive.google.com/drive/folders/{folder_id}"
-    return folder_url, uploaded_urls
+    print(f"  [파마브로스] ✅ 업로드 완료: {file_name}")
+    print(f"  [파마브로스] 다운로드 URL: {file_url}")
+    return file_url, [(file_name, file_url)]
