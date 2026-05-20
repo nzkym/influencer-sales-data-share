@@ -83,6 +83,7 @@ def create_excel(
     date_from: str,
     date_to: str,
     is_final: bool,
+    product_url: str = "",
 ) -> bytes:
     """
     주문 데이터를 받아 엑셀 바이트를 반환합니다.
@@ -119,25 +120,35 @@ def create_excel(
     # ── 2행: 발행 시각 ────────────────────────────────────
     ws.merge_cells("A2:E2")
     ts_cell = ws["A2"]
-    ts_cell.value     = f"생성: {now_kst().strftime('%Y-%m-%d %H:%M')} KST    총 {len(orders)}건"
+    ts_cell.value     = f"업로드: {now_kst().strftime('%Y-%m-%d %H:%M')} KST    총 {len(orders)}건"
     ts_cell.font      = Font(name="맑은 고딕", size=9, color="888888")
     ts_cell.alignment = RIGHT = Alignment(horizontal="right", vertical="center")
     ws.row_dimensions[2].height = 18
 
-    # ── 3행: 헤더 ─────────────────────────────────────────
+    # ── 3행: 상품링크 ────────────────────────────────────
+    LINK_FILL = PatternFill("solid", fgColor="F0F4FF")
+    ws.merge_cells("A3:E3")
+    lk = ws["A3"]
+    lk.value     = f"상품링크: {product_url}" if product_url else "상품링크: -"
+    lk.font      = Font(name="맑은 고딕", size=9, color="1A2744")
+    lk.fill      = LINK_FILL
+    lk.alignment = Alignment(horizontal="left", vertical="center")
+    ws.row_dimensions[3].height = 16
+
+    # ── 4행: 헤더 ─────────────────────────────────────────
     headers = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량"]
     for col, h in enumerate(headers, 1):
-        c = ws.cell(row=3, column=col, value=h)
+        c = ws.cell(row=4, column=col, value=h)
         c.font      = WHITE_FONT
         c.fill      = HEADER_FILL
         c.alignment = CENTER
         c.border    = BORDER
-    ws.row_dimensions[3].height = 22
+    ws.row_dimensions[4].height = 22
 
     # ── 데이터 행 ─────────────────────────────────────────
     EVEN_FILL = PatternFill("solid", fgColor="F8F9FB")
     for idx, order in enumerate(orders, 1):
-        row = idx + 3
+        row = idx + 4
         row_fill = EVEN_FILL if idx % 2 == 0 else None
         values = [
             order.get("주문번호", ""),
@@ -157,7 +168,7 @@ def create_excel(
         ws.row_dimensions[row].height = 18
 
     # ── 합계 행 ───────────────────────────────────────────
-    total_row = len(orders) + 4
+    total_row = len(orders) + 5
     total_qty = sum(o.get("주문수량", 0) for o in orders)
     ws.merge_cells(f"A{total_row}:D{total_row}")
     tc1 = ws[f"A{total_row}"]
@@ -180,8 +191,8 @@ def create_excel(
     _col_width(ws, 4, 36)   # 옵션
     _col_width(ws, 5, 10)   # 주문수량
 
-    # ── 틀 고정 (3행 이후) ────────────────────────────────
-    ws.freeze_panes = "A4"
+    # ── 틀 고정 (4행 헤더 이후) ──────────────────────────
+    ws.freeze_panes = "A5"
 
     # 바이트로 반환
     buf = io.BytesIO()
@@ -244,21 +255,23 @@ def upload_to_drive(
 
 
 # ── 파일명 생성 ───────────────────────────────────────────
-def make_filenames(is_final: bool, date_from: str, date_to: str) -> list[str]:
+def make_filenames(title: str, is_final: bool, date_from: str, date_to: str) -> list[str]:
     """
     업로드할 파일명 목록 반환 (항상 1개).
+    날짜범위는 파일명 대신 엑셀 내부에 표기.
 
-    정기 업로드: 파마브로스_판매현황_20260514~20260520_1400.xlsx
-    최종 업로드: 파마브로스_판매현황_최종_20260514~20260520.xlsx
+    정기 업로드: 할링희_20260520_1400.xlsx   (업로드 날짜+시각)
+    최종 업로드: 할링희_최종_20260521_1000.xlsx
     """
-    d_from = date_from.replace("-", "")
-    d_to   = date_to.replace("-", "")
+    safe = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+    now  = now_kst()
+    date = now.strftime("%Y%m%d")
+    hour = now.strftime("%H")
 
     if is_final:
-        return [f"파마브로스_판매현황_최종_{d_from}~{d_to}.xlsx"]
+        return [f"{safe}_최종_{date}_{hour}시업로드.xlsx"]
     else:
-        hhmm = now_kst().strftime("%H%M")
-        return [f"파마브로스_판매현황_{d_from}~{d_to}_{hhmm}.xlsx"]
+        return [f"{safe}_{date}_{hour}시업로드.xlsx"]
 
 
 # ── 메인 실행 함수 ────────────────────────────────────────
@@ -300,16 +313,18 @@ def run_pharmabros(
     )
 
     # 엑셀 생성
+    product_url = campaign.get("url", "").split("?")[0]  # 쿼리스트링 제거
     excel_bytes = create_excel(
         orders=orders,
         title=title,
         date_from=date_from,
         date_to=query_to,
         is_final=is_final,
+        product_url=product_url,
     )
 
-    # 파일명
-    file_name = make_filenames(is_final, date_from, query_to)[0]
+    # 파일명: 제목_시작일~종료일_시각.xlsx
+    file_name = make_filenames(title, is_final, date_from, query_to)[0]
 
     # 구글 드라이브 업로드 (사장님 계정)
     file_url = upload_to_drive(
