@@ -586,25 +586,13 @@ def _run_pharmabros_if_needed(force: bool = False):
                 )
                 continue  # 기존 기능에 영향 없이 스킵
 
-            folder_url, uploaded_urls = pharmabros.run_pharmabros(
+            pharmabros.run_pharmabros(
                 campaign=campaign,
                 credentials_path=CREDENTIALS_PATH,
                 oauth_client_id=PHARMABROS_OAUTH_CLIENT_ID,
                 oauth_client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
                 oauth_refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
                 drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
-            )
-            label = "최종" if is_final else "중간"
-            # 파일명 + 다운로드 URL
-            files_text = "\n".join(
-                f"  📄 {name}\n  🔗 {url}" for name, url in uploaded_urls
-            )
-            send_telegram(
-                f"✅ [파마브로스 {label} 업로드 완료]\n\n"
-                f"📦 캠페인: {title[:40]}\n"
-                f"📅 기간: {start_date} ~ {end_date}\n\n"
-                f"⬇️ 다운로드 링크:\n{files_text}\n\n"
-                f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
         except Exception as e:
             print(f"  [파마브로스 오류] {e}")
