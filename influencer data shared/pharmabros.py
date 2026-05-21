@@ -264,14 +264,11 @@ def make_filenames(title: str, is_final: bool, date_from: str, date_to: str) -> 
     최종 업로드: 할링희_최종_20260521_1000.xlsx
     """
     safe = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-    now  = now_kst()
-    date = now.strftime("%Y%m%d")
-    hour = now.strftime("%H")
 
     if is_final:
-        return [f"{safe}_최종_{date}_{hour}시업로드.xlsx"]
+        return [f"{safe}_판매현황_최종.xlsx"]
     else:
-        return [f"{safe}_{date}_{hour}시업로드.xlsx"]
+        return [f"{safe}_판매현황.xlsx"]
 
 
 # ── 메인 실행 함수 ────────────────────────────────────────
