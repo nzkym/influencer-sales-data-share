@@ -203,11 +203,15 @@ def _match_profit(product_name: str, profit_params: list) -> dict:
             continue
         nkw = [norm(kw) for kw in keywords]
         matches = sum(1 for kw in nkw if kw and (kw in name_n or kw in clean_n))
+        # 최소 2개 키워드 일치 (단일 '뉴트원'만으로 오매칭 방지)
+        if matches < 2:
+            continue
         score = matches / len(keywords)
-        if score > best_score and score >= 0.6:
+        if score > best_score:
             best_score = score
             best_row = row
 
+    # P열에서 검증 가능하므로 최선의 결과를 항상 반환
     return best_row or {}
 
 
