@@ -463,59 +463,53 @@ def update_summary_tab():
     all_rows.sort(key=lambda r: str(r.get("date_to", "")), reverse=True)
 
     # ── L/M/N/O열 계산 ────────────────────────────────────────
-    # 이익계산참고사항 로드
+    # 이익계산참고사항 로드 (시트 읽기, 1회)
     profit_params = []
     try:
         profit_params = sheets.read_profit_params(MASTER_SHEET_URL)
     except Exception as e:
         print(f"  [이익참고] 읽기 실패: {e}")
 
-    # 시트1의 I(매출), J(공구수수료) 로드
+    # 시트1 J열(공구수수료) 로드 (시트 읽기, 1회)
     master1_lm = _read_master_sheet1_lm()
 
-    # 캠페인 제목 → 인증정보 맵
+    # 새로 집계되는 캠페인 제목 집합 (이 타이밍에만 매출 API 호출)
+    fetch_titles   = {r["title"] for r in new_rows}
     title_to_campaign = {c["title"]: c for c in all_campaigns}
-
-    KST = timezone(timedelta(hours=9))
-    today_str = datetime.now(KST).date().strftime("%Y-%m-%d")
 
     row_extras = {}
     for row in all_rows:
-        title = row["title"]
-        campaign = title_to_campaign.get(title, {})
-        is_ended = str(row.get("date_to", "")) < today_str
-
-        # ── 매출 ──────────────────────────────────────────────
-        # 우선순위: 시트1 I열 → 캠페인실적 L열 캐시 → API 조회
-        s1_revenue = master1_lm.get(title, {}).get("revenue", "")
-        cached_rev = row.get("revenue", "")
-
-        if isinstance(s1_revenue, int) and s1_revenue > 0:
-            revenue = s1_revenue                           # 시트1에 수기 입력값
-        elif is_ended and isinstance(cached_rev, int) and cached_rev > 0:
-            revenue = cached_rev                           # 종료 캠페인 캐시 재사용
-        elif campaign:
-            # API 조회 (진행중은 매번, 종료는 캐시 없을 때만)
-            try:
-                revenue = naver_api.get_campaign_revenue(
-                    campaign["api_id"], campaign["api_secret"],
-                    campaign["product_no"],
-                    campaign["date_from"], campaign["date_to"],
-                )
-            except Exception as e:
-                print(f"  [매출조회 실패] {title}: {e}")
-                revenue = cached_rev if isinstance(cached_rev, int) else ""
-        else:
-            revenue = cached_rev if isinstance(cached_rev, int) else ""
-
-        # ── 공구수수료 ────────────────────────────────────────
-        # 우선순위: 시트1 J열 → 캠페인실적 M열 캐시
-        s1_comm = master1_lm.get(title, {}).get("commission", "")
-        commission = s1_comm if s1_comm != "" else row.get("commission", "")
-
-        # ── 이익계산참고사항 매칭 ─────────────────────────────
+        title        = row["title"]
         product_name = row.get("product_name", "") or title
-        pp = sheets._match_profit(product_name, profit_params)
+        pp           = sheets._match_profit(product_name, profit_params)
+
+        # ── 매출(L): 이미 계산된 캠페인은 캐시 그대로 ──────────
+        if title not in fetch_titles:
+            # kept_rows: 기존 L열 값 재사용 (API 호출 없음)
+            revenue = row.get("revenue", "")
+        else:
+            # fetch_campaigns: 종료 시 1회만 API 조회
+            s1_rev = master1_lm.get(title, {}).get("revenue", "")
+            if isinstance(s1_rev, int) and s1_rev > 0:
+                revenue = s1_rev          # 시트1에 수기 입력값 우선
+            else:
+                campaign = title_to_campaign.get(title, {})
+                if campaign:
+                    try:
+                        revenue = naver_api.get_campaign_revenue(
+                            campaign["api_id"], campaign["api_secret"],
+                            campaign["product_no"],
+                            campaign["date_from"], campaign["date_to"],
+                        )
+                    except Exception as e:
+                        print(f"  [매출조회 실패] {title}: {e}")
+                        revenue = ""
+                else:
+                    revenue = ""
+
+        # ── 공구수수료(M): 시트1 J열 항상 최신값 반영 ───────────
+        s1_comm    = master1_lm.get(title, {}).get("commission", "")
+        commission = s1_comm if s1_comm != "" else row.get("commission", "")
 
         row_extras[title] = {
             "revenue":       revenue,
