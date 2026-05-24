@@ -279,7 +279,7 @@ def write_summary_tab(
     header = [
         "No", "제목", "제품명", "스토어", "시작일", "종료일",
         "주문수", "제품수", "상태", "진행링크", "업데이트",
-        "매출", "공구수수료(vat포함)", "이익", "이익률",
+        "매출", "공구수수료(vat포함)", "이익", "이익률", "매칭원가제품명",
     ]
     values = [header]
 
@@ -299,6 +299,9 @@ def write_summary_tab(
             commission = row.get("commission", "")
             if not isinstance(commission, (int, float)):
                 commission = ""
+
+        # ── P열 매칭원가제품명 ────────────────────
+        matched_name = extras.get("matched_name", "")
 
         # ── N열 이익 수식 ─────────────────────────
         pp = extras.get("profit_params", {})
@@ -338,6 +341,7 @@ def write_summary_tab(
             commission if commission != "" else "",
             n_formula,
             o_formula,
+            matched_name,
         ])
 
     # ── 시트 전체를 A-O 한 번에 쓰기 (clear 사용하지 않음) ──
@@ -378,10 +382,10 @@ def write_summary_tab(
             "cell": {"userEnteredFormat": {"backgroundColor": bg}},
             "fields": "userEnteredFormat(backgroundColor)",
         }})
-        # L-O: 연한 초록 배경으로 구분
+        # L-P: 연한 초록 배경으로 구분
         COLOR_LMNO_BG = {"red": 0.90, "green": 0.97, "blue": 0.90}
         R.append({"repeatCell": {
-            "range": cell_range(row_idx, 11, row_idx + 1, 15),  # L-O
+            "range": cell_range(row_idx, 11, row_idx + 1, 16),  # L-P
             "cell": {"userEnteredFormat": {
                 "backgroundColor": COLOR_LMNO_BG,
                 "textFormat": {"bold": False, "foregroundColor": BLACK},
@@ -408,8 +412,8 @@ def write_summary_tab(
             "fields": "userEnteredFormat(numberFormat)",
         }})
 
-    # 열 너비 (A-O)
-    col_widths = [40, 100, 260, 65, 85, 85, 55, 55, 55, 200, 110, 100, 70, 100, 70]
+    # 열 너비 (A-P)
+    col_widths = [40, 100, 260, 65, 85, 85, 55, 55, 55, 200, 110, 100, 70, 100, 70, 180]
     for idx, width in enumerate(col_widths):
         R.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS",

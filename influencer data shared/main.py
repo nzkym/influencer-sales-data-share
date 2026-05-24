@@ -511,10 +511,12 @@ def update_summary_tab():
         s1_comm    = master1_lm.get(title, {}).get("commission", "")
         commission = s1_comm if s1_comm != "" else row.get("commission", "")
 
+        matched_name = str(pp.get("name", "")) if pp else ""
         row_extras[title] = {
             "revenue":       revenue,
             "commission":    commission,
             "profit_params": pp,
+            "matched_name":  matched_name,
         }
 
     sheets.write_summary_tab(MASTER_SHEET_URL, all_rows, row_extras=row_extras)
