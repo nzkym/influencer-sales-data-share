@@ -169,6 +169,9 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
 
     try:
         ws = spreadsheet.worksheet("캠페인 실적")
+        # 기존 시트도 열이 부족하면 30열로 확장
+        if ws.col_count < 30:
+            ws.resize(rows=ws.row_count, cols=30)
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=30)
 
