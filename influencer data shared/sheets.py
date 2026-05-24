@@ -140,7 +140,7 @@ def read_profit_params(spreadsheet_url: str) -> list:
         client = _get_client()
         sheet_id = _extract_sheet_id(spreadsheet_url)
         ss = client.open_by_key(sheet_id)
-        ws = ss.worksheet("이익계산참고사항")
+        ws = ss.worksheet("이익계산참고사항(자사확인용)")
         rows = ws.get_all_values()
 
         def parse_num(s):
@@ -309,7 +309,7 @@ def read_summary_tab(spreadsheet_url: str) -> dict:
         client = _get_client()
         sheet_id = _extract_sheet_id(spreadsheet_url)
         spreadsheet = client.open_by_key(sheet_id)
-        ws = spreadsheet.worksheet("캠페인 실적")
+        ws = spreadsheet.worksheet("캠페인 실적(자사확인용)")
         records = ws.get_all_records()
         result = {}
         for row in records:
@@ -357,11 +357,11 @@ def write_summary_tab(
     spreadsheet = client.open_by_key(sheet_id)
 
     try:
-        ws = spreadsheet.worksheet("캠페인 실적")
+        ws = spreadsheet.worksheet("캠페인 실적(자사확인용)")
         if ws.col_count < 30:
             ws.resize(rows=ws.row_count, cols=30)
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=30)
+        ws = spreadsheet.add_worksheet(title="캠페인 실적(자사확인용)", rows=200, cols=30)
 
     header = [
         "No", "제목", "제품명", "스토어", "시작일", "종료일",

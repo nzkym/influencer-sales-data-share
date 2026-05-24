@@ -150,7 +150,7 @@ def main():
         print(f"인플루언서 시트 URL 로드 실패: {e}")
 
     # ── 캠페인 실적 탭 읽기 ───────────────────────────────────
-    ws_camp = ss.worksheet("캠페인 실적")
+    ws_camp = ss.worksheet("캠페인 실적(자사확인용)")
     all_vals = ws_camp.get_all_values()
     if not all_vals:
         print("캠페인 실적 탭이 비어있습니다.")
