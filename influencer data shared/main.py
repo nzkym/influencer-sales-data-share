@@ -511,12 +511,41 @@ def update_summary_tab():
         s1_comm    = master1_lm.get(title, {}).get("commission", "")
         commission = s1_comm if s1_comm != "" else row.get("commission", "")
 
-        matched_name = str(pp.get("name", "")) if pp else ""
+        # ── 옵션별 원가 계산 (멀티제품 캠페인) ──────────────────
+        option_cost_total = 0
+        option_delivery   = 0
+        option_ch_comm    = 0.0
+        opt_matched_names = []
+        campaign_info = title_to_campaign.get(title, {})
+        c_sheet_url   = campaign_info.get("sheet_url", "")
+        if c_sheet_url and isinstance(revenue, int) and revenue > 0:
+            try:
+                option_totals = sheets.read_option_totals_from_sheet(c_sheet_url)
+                if len(option_totals) >= 2:
+                    opt_res = sheets.calc_option_cost(option_totals, profit_params)
+                    if opt_res["total_cost"] > 0:
+                        option_cost_total = opt_res["total_cost"]
+                        option_delivery   = opt_res["delivery"]
+                        option_ch_comm    = opt_res["ch_comm"]
+                        opt_matched_names = opt_res["matched_names"]
+                        print(f"  [멀티원가] {title[:30]}: {' + '.join(opt_matched_names)} = {option_cost_total:,}원")
+            except Exception as e:
+                print(f"  [옵션별 원가 실패] {title}: {e}")
+
+        # P열 매칭 제품명 (멀티제품이면 "+", 단일이면 단독)
+        if opt_matched_names:
+            matched_name = " + ".join(opt_matched_names)
+        else:
+            matched_name = str(pp.get("name", "")) if pp else ""
+
         row_extras[title] = {
-            "revenue":       revenue,
-            "commission":    commission,
-            "profit_params": pp,
-            "matched_name":  matched_name,
+            "revenue":           revenue,
+            "commission":        commission,
+            "profit_params":     pp,
+            "matched_name":      matched_name,
+            "option_cost_total": option_cost_total,
+            "option_delivery":   option_delivery,
+            "option_ch_comm":    option_ch_comm,
         }
 
     sheets.write_summary_tab(MASTER_SHEET_URL, all_rows, row_extras=row_extras)

@@ -134,6 +134,21 @@ def main():
     for k, v in comm_map.items():
         print(f"  '{k}' → {v}%")
 
+    # ── Sheet1에서 제목 → 인플루언서 구글시트 URL 매핑 읽기 ──
+    try:
+        ws_sheet1 = ss.sheet1
+        sheet1_rows = ws_sheet1.get_all_records()
+        title_to_sheet_url = {}
+        for r in sheet1_rows:
+            t  = str(r.get("제목", "")).strip()
+            su = str(r.get("데이터공유 구글스프레드_인플루언서전달링크", "")).strip()
+            if t and su:
+                title_to_sheet_url[t] = su
+        print(f"인플루언서 시트 URL: {len(title_to_sheet_url)}개 로드")
+    except Exception as e:
+        title_to_sheet_url = {}
+        print(f"인플루언서 시트 URL 로드 실패: {e}")
+
     # ── 캠페인 실적 탭 읽기 ───────────────────────────────────
     ws_camp = ss.worksheet("캠페인 실적")
     all_vals = ws_camp.get_all_values()
@@ -198,6 +213,17 @@ def main():
         if l_positive and m_filled and n_filled and not p_filled:
             pp = sheets_mod._match_profit(product_name or title, profit_params)
             matched_name = str(pp.get("name", "")) if pp else ""
+            # 멀티제품 체크
+            sheet_url_p = title_to_sheet_url.get(title, "")
+            if sheet_url_p:
+                try:
+                    opt_totals_p = sheets_mod.read_option_totals_from_sheet(sheet_url_p)
+                    if len(opt_totals_p) >= 2:
+                        opt_res_p = sheets_mod.calc_option_cost(opt_totals_p, profit_params)
+                        if opt_res_p["matched_names"]:
+                            matched_name = " + ".join(opt_res_p["matched_names"])
+                except Exception:
+                    pass
             updates.append({"r_idx": r_idx, "p_only": True, "matched_name": matched_name})
             print(f"  [{r_idx}] {title[:30]}: P열만 채움 → '{matched_name}'")
             continue
@@ -261,6 +287,27 @@ def main():
         # 원가 매칭 및 N 수식
         pp = sheets_mod._match_profit(product_name or title, profit_params)
         matched_name = str(pp.get("name", "")) if pp else ""
+
+        # 멀티제품: 옵션별 원가 계산
+        option_cost_total = 0
+        option_delivery   = 0
+        option_ch_comm    = 0.0
+        sheet_url_row = title_to_sheet_url.get(title, "")
+        if sheet_url_row:
+            try:
+                option_totals = sheets_mod.read_option_totals_from_sheet(sheet_url_row)
+                if len(option_totals) >= 2:
+                    opt_res = sheets_mod.calc_option_cost(option_totals, profit_params)
+                    if opt_res["total_cost"] > 0:
+                        option_cost_total = opt_res["total_cost"]
+                        option_delivery   = opt_res["delivery"]
+                        option_ch_comm    = opt_res["ch_comm"]
+                        if opt_res["matched_names"]:
+                            matched_name = " + ".join(opt_res["matched_names"])
+                            print(f"       멀티원가: {matched_name} = {option_cost_total:,}원")
+            except Exception as e:
+                print(f"       옵션별 원가 실패: {e}")
+
         if matched_name:
             print(f"       원가매칭: '{matched_name}'")
         else:
@@ -268,18 +315,30 @@ def main():
 
         n_formula = ""
         revenue_int = revenue if isinstance(revenue, int) else 0
-        if pp and revenue_int > 0 and commission != "":
-            cost     = int(pp.get("cost", 0) or 0)
-            ch_comm  = float(pp.get("channel_comm", 0) or 0)
-            delivery = int(pp.get("delivery", 3000) or 3000)
-            if cost > 0:
+        if revenue_int > 0 and commission != "":
+            if option_cost_total > 0:
+                # 멀티제품: 하드코딩된 총원가
+                del_v = option_delivery or 3000
+                ch_v  = option_ch_comm
                 n_formula = (
                     f"=L{r_idx}"
-                    f"-({cost}*H{r_idx})"
+                    f"-{option_cost_total}"
                     f"-(L{r_idx}*(M{r_idx}/100))"
-                    f"-(L{r_idx}*{ch_comm})"
-                    f"-({delivery}*G{r_idx})"
+                    f"-(L{r_idx}*{ch_v})"
+                    f"-({del_v}*G{r_idx})"
                 )
+            elif pp:
+                cost     = int(pp.get("cost", 0) or 0)
+                ch_comm  = float(pp.get("channel_comm", 0) or 0)
+                delivery = int(pp.get("delivery", 3000) or 3000)
+                if cost > 0:
+                    n_formula = (
+                        f"=L{r_idx}"
+                        f"-({cost}*H{r_idx})"
+                        f"-(L{r_idx}*(M{r_idx}/100))"
+                        f"-(L{r_idx}*{ch_comm})"
+                        f"-({delivery}*G{r_idx})"
+                    )
 
         o_formula = f"=IFERROR(N{r_idx}/L{r_idx},\"\")" if n_formula else ""
 

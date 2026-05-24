@@ -215,6 +215,94 @@ def _match_profit(product_name: str, profit_params: list) -> dict:
     return best_row or {}
 
 
+def read_option_totals_from_sheet(sheet_url: str) -> dict:
+    """개별 캠페인 시트(판매현황 탭)에서 옵션별 총 제품수 반환.
+    반환: {option_name: total_product_count}
+    옵션이 1개뿐이거나 읽기 실패 시 {} 반환.
+    """
+    if not sheet_url:
+        return {}
+    try:
+        client = _get_client()
+        sheet_id = _extract_sheet_id(sheet_url)
+        spreadsheet = client.open_by_key(sheet_id)
+        ws = spreadsheet.sheet1
+        all_vals = ws.get_all_values()
+
+        # 헤더 행 탐색 (날짜/옵션 컬럼)
+        header_idx = None
+        for i, row in enumerate(all_vals):
+            if len(row) >= 2 and row[0].strip() == "날짜" and row[1].strip() == "옵션":
+                header_idx = i
+                break
+        if header_idx is None:
+            return {}
+
+        # 옵션별 제품수 합산
+        option_totals = {}
+        for row in all_vals[header_idx + 1:]:
+            if not row or not row[0].strip():
+                continue
+            # 그래프용 보조 데이터 시작 시 종료
+            if row[0].strip() == "날짜 (그래프용)":
+                break
+            option = row[1].strip() if len(row) > 1 else ""
+            try:
+                products = int(str(row[3]).replace(",", "").strip() or 0) if len(row) > 3 else 0
+            except (ValueError, TypeError):
+                products = 0
+            if option and products > 0:
+                option_totals[option] = option_totals.get(option, 0) + products
+
+        return option_totals
+    except Exception as e:
+        print(f"  [옵션별 시트 읽기 실패] {e}")
+        return {}
+
+
+def calc_option_cost(option_totals: dict, profit_params: list) -> dict:
+    """옵션별 제품수 × 원가를 합산하여 총 원가 계산.
+    반환: {
+        "total_cost":    int,        # 총 원가 합계 (cost_i × product_count_i 합산)
+        "delivery":      int,        # 대표 배송비 (첫 번째 매칭 기준)
+        "ch_comm":       float,      # 대표 채널수수료율 (첫 번째 매칭 기준)
+        "matched_names": list[str],  # 매칭된 제품명 목록
+        "matched_count": int,        # 매칭 성공한 옵션 수
+    }
+    """
+    result = {
+        "total_cost":    0,
+        "delivery":      3000,
+        "ch_comm":       0.0,
+        "matched_names": [],
+        "matched_count": 0,
+    }
+    if not option_totals or not profit_params:
+        return result
+
+    delivery_set = False
+    ch_comm_set  = False
+
+    for option, product_count in option_totals.items():
+        pp = _match_profit(option, profit_params)
+        if not pp:
+            continue
+        result["matched_count"] += 1
+        cost = int(pp.get("cost", 0) or 0)
+        result["total_cost"] += cost * product_count
+        name = str(pp.get("name", ""))
+        if name and name not in result["matched_names"]:
+            result["matched_names"].append(name)
+        if not ch_comm_set:
+            result["ch_comm"] = float(pp.get("channel_comm", 0) or 0)
+            ch_comm_set = True
+        if not delivery_set:
+            result["delivery"] = int(pp.get("delivery", 3000) or 3000)
+            delivery_set = True
+
+    return result
+
+
 def read_summary_tab(spreadsheet_url: str) -> dict:
     """'캠페인 실적' 탭 읽기. 반환: {제목: row_dict}"""
     try:
@@ -304,20 +392,36 @@ def write_summary_tab(
         matched_name = extras.get("matched_name", "")
 
         # ── N열 이익 수식 ─────────────────────────
-        pp = extras.get("profit_params", {})
+        pp                = extras.get("profit_params", {})
+        option_cost_total = extras.get("option_cost_total", 0)
+        option_delivery   = extras.get("option_delivery", 0)
+        option_ch_comm    = extras.get("option_ch_comm", 0.0)
+
         n_formula = ""
-        if pp and isinstance(revenue, int) and revenue > 0 and commission != "":
-            cost     = int(pp.get("cost", 0) or 0)
-            ch_comm  = float(pp.get("channel_comm", 0) or 0)
-            delivery = int(pp.get("delivery", 3000) or 3000)
-            if cost > 0:
+        if isinstance(revenue, int) and revenue > 0 and commission != "":
+            if option_cost_total > 0:
+                # 멀티제품: 옵션별 원가×제품수 합산값 하드코딩
+                del_v = option_delivery or 3000
+                ch_v  = option_ch_comm
                 n_formula = (
                     f"=L{row_sheet}"
-                    f"-({cost}*H{row_sheet})"
+                    f"-{option_cost_total}"
                     f"-(L{row_sheet}*(M{row_sheet}/100))"
-                    f"-(L{row_sheet}*{ch_comm})"
-                    f"-({delivery}*G{row_sheet})"
+                    f"-(L{row_sheet}*{ch_v})"
+                    f"-({del_v}*G{row_sheet})"
                 )
+            elif pp:
+                cost     = int(pp.get("cost", 0) or 0)
+                ch_comm  = float(pp.get("channel_comm", 0) or 0)
+                delivery = int(pp.get("delivery", 3000) or 3000)
+                if cost > 0:
+                    n_formula = (
+                        f"=L{row_sheet}"
+                        f"-({cost}*H{row_sheet})"
+                        f"-(L{row_sheet}*(M{row_sheet}/100))"
+                        f"-(L{row_sheet}*{ch_comm})"
+                        f"-({delivery}*G{row_sheet})"
+                    )
 
         # ── O열 이익률 수식 ───────────────────────
         o_formula = (
