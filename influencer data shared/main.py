@@ -512,13 +512,15 @@ def update_summary_tab():
         commission = s1_comm if s1_comm != "" else row.get("commission", "")
 
         # ── 옵션별 원가 계산 (멀티제품 캠페인) ──────────────────
+        # 새로 종료된 캠페인(fetch_titles)에만 개별 시트 읽기 실행
+        # kept_rows는 이미 N 수식이 있으므로 매 시간 재조회 불필요
         option_cost_total = 0
         option_delivery   = 0
         option_ch_comm    = 0.0
         opt_matched_names = []
         campaign_info = title_to_campaign.get(title, {})
         c_sheet_url   = campaign_info.get("sheet_url", "")
-        if c_sheet_url and isinstance(revenue, int) and revenue > 0:
+        if title in fetch_titles and c_sheet_url and isinstance(revenue, int) and revenue > 0:
             try:
                 option_totals = sheets.read_option_totals_from_sheet(c_sheet_url)
                 if len(option_totals) >= 2:

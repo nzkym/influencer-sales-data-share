@@ -315,7 +315,6 @@ def read_summary_tab(spreadsheet_url: str) -> dict:
         for row in records:
             title = str(row.get("제목", "")).strip()
             if title:
-                # 캐시된 매출 값 파싱
                 raw_rev = str(row.get("매출", "")).replace(",", "").strip()
                 cached_revenue = int(raw_rev) if raw_rev.lstrip("-").isdigit() else ""
                 raw_comm = str(row.get("공구수수료(vat포함)", "")).replace(",", "").strip()
