@@ -1,10 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-캠페인 실적 탭의 기존 행 L~O열 일괄 채우기 (1회 실행용)
+캠페인 실적 탭의 기존 행 L~P열 일괄 채우기 (1회 실행용)
 - L: 네이버 API 매출 조회 (L이 비어있는 행만)
-- M: 시트1 J열 공구수수료
+- M: 공구수수료 시트에서 수수료 조회
 - N: 이익 수식
 - O: 이익률 수식
+- P: 매칭된 원가 제품명 (확인용)
+
+수수료 매칭 우선순위:
+  1순위: 채널명 정확 매칭
+  2순위: 채널명 부분 매칭
+  3순위: 상품번호 + 캠페인 월 매칭 (같은 링크라도 다른 인플루언서 구분)
 """
 import re, os, sys
 from pathlib import Path
@@ -38,7 +44,7 @@ def get_gs_client():
     return gspread.authorize(creds)
 
 def extract_product_no(url):
-    m = re.search(r"/products/(\d+)", url)
+    m = re.search(r"/products/(\d+)", str(url))
     return m.group(1) if m else ""
 
 def extract_commission(raw):
@@ -47,11 +53,22 @@ def extract_commission(raw):
     m = re.search(r'공구수수료\s*(\d+(?:\.\d+)?)\s*%', s)
     if m:
         return float(m.group(1))
-    # 2순위: 단순 "XX%" 또는 숫자만 (컨텐츠비용 등 혼합 표기 없을 때)
+    # 2순위: 단순 숫자 (컨텐츠비용 혼합 없을 때만)
     if '컨텐츠' not in s:
         m = re.search(r'(\d+(?:\.\d+)?)', s)
         if m:
             return float(m.group(1))
+    return ""
+
+def tab_year_month(tab_title: str) -> str:
+    """탭 이름에서 YYYY-MM 추출. 예: '26.5' → '2026-05', '5월' → '2026-05'"""
+    t = tab_title.strip()
+    m = re.match(r'(\d{2})\.(\d{1,2})', t)
+    if m:
+        return f"20{m.group(1)}-{int(m.group(2)):02d}"
+    m2 = re.match(r'(\d{1,2})\s*월', t)
+    if m2:
+        return f"2026-{int(m2.group(1)):02d}"
     return ""
 
 def main():
@@ -66,17 +83,22 @@ def main():
     profit_params = sheets_mod.read_profit_params(MASTER_SHEET_URL)
     print(f"이익계산참고사항: {len(profit_params)}개 제품 로드")
 
-    # ── 공구수수료 시트에서 채널명→수수료 맵 구성 ───────────────
+    # ── 공구수수료 시트 로드 ───────────────────────────────────
     COMM_SHEET_URL = "https://docs.google.com/spreadsheets/d/1tNYLgKB-rXcwF5ZdjxT3xti4ygvNl6SEJ-x0w8Gmjt0/edit"
     comm_sid = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", COMM_SHEET_URL).group(1)
     ss_comm = client.open_by_key(comm_sid)
 
-    comm_map = {}   # {채널명(소문자): 공구수수료 float}
+    comm_map = {}          # {채널명(소문자): 공구수수료 float}
+    # {상품번호: [(commission, year_month)]}  ← 상품번호+월 기반 fallback
+    comm_by_product_no = {}
+
     for ws_tab in ss_comm.worksheets():
         title_lower = ws_tab.title.lower()
-        # 월별 탭만 처리 (뉴트원 검색량 등 무관 탭 제외)
+        # 월별 탭만 처리
         if not any(x in title_lower for x in ["월", ".1", ".2", ".3", ".4", ".5", ".6"]):
             continue
+        ym = tab_year_month(ws_tab.title)   # 탭의 년월
+
         try:
             tab_rows = ws_tab.get_all_values()
         except Exception:
@@ -89,26 +111,34 @@ def main():
             d_col = row[3].strip() if len(row) > 3 else ""
 
             if b_col == "공구" and d_col:
-                channel = d_col  # 채널명
-                # 다음 행(들)에서 공구링크 행의 M열 수수료 수집
+                channel = d_col
                 j = i + 1
                 while j < len(tab_rows):
                     nrow = tab_rows[j]
                     nb = nrow[1].strip() if len(nrow) > 1 else ""
-                    if nb == "공구":  # 다음 공구 시작 → 중단
+                    if nb == "공구":
                         break
                     if nb == "공구링크":
-                        m_val = nrow[12].strip() if len(nrow) > 12 else ""  # M열=인덱스12
+                        m_val = nrow[12].strip() if len(nrow) > 12 else ""
                         comm = extract_commission(m_val)
-                        if comm != "" and channel:
-                            # 같은 채널명이 여러 번 나오면 가장 최신(마지막) 값으로 덮어씀
-                            comm_map[channel.lower()] = comm
+                        if comm != "":
+                            # 채널명 맵 (최신값 덮어씀)
+                            if channel:
+                                comm_map[channel.lower()] = comm
+                            # 상품번호 맵 (진행링크 열에서 URL 추출)
+                            for cell in nrow:
+                                pno = extract_product_no(str(cell))
+                                if pno and ym:
+                                    if pno not in comm_by_product_no:
+                                        comm_by_product_no[pno] = []
+                                    comm_by_product_no[pno].append((comm, ym))
                     j += 1
                 i = j
             else:
                 i += 1
 
-    print(f"공구수수료 시트에서 {len(comm_map)}개 채널 로드:")
+    print(f"공구수수료 시트: {len(comm_map)}개 채널, {len(comm_by_product_no)}개 상품번호 로드")
+    print("채널 목록:")
     for k, v in comm_map.items():
         print(f"  '{k}' → {v}%")
 
@@ -120,55 +150,53 @@ def main():
         return
 
     header = all_vals[0]
-    print(f"헤더: {header[:15]}")
-
-    # 열 인덱스 확인
     col = {h: i for i, h in enumerate(header)}
-    print(f"열 인덱스: {col}")
+    print(f"\n헤더: {header[:16]}")
+    data_rows = all_vals[1:]
 
-    data_rows = all_vals[1:]  # 헤더 제외
+    # ── P열 헤더 확인/추가 ────────────────────────────────────
+    p1_val = str(header[15]).strip() if len(header) > 15 else ""
+    if not p1_val:
+        ws_camp.update(values=[["매칭제품명"]], range_name="P1")
+        print("P1 헤더 '매칭제품명' 추가")
 
     # ── 각 행 처리 ────────────────────────────────────────────
-    updates = []   # (sheet_row_number, L_val, M_val, N_formula, O_formula)
+    # (row_idx, revenue, commission, n_formula, o_formula, matched_name)
+    updates = []
 
-    for r_idx, row in enumerate(data_rows, start=2):  # 시트 행 번호 (1=헤더, 2=첫 데이터)
-        if not row or not row[0]:   # No 열이 비면 스킵
+    for r_idx, row in enumerate(data_rows, start=2):
+        if not row or not row[0]:
             continue
 
-        title       = row[col.get("제목", 1)]         if len(row) > col.get("제목", 1) else ""
-        product_name= row[col.get("제품명", 2)]       if len(row) > col.get("제품명", 2) else ""
-        store       = row[col.get("스토어", 3)]       if len(row) > col.get("스토어", 3) else ""
-        date_from   = row[col.get("시작일", 4)]       if len(row) > col.get("시작일", 4) else ""
-        date_to     = row[col.get("종료일", 5)]       if len(row) > col.get("종료일", 5) else ""
-        g_orders    = row[col.get("주문수", 6)]       if len(row) > col.get("주문수", 6) else "0"
-        h_products  = row[col.get("제품수", 7)]       if len(row) > col.get("제품수", 7) else "0"
-        naver_url   = row[col.get("진행링크", 9)]     if len(row) > col.get("진행링크", 9) else ""
-        l_revenue   = row[col.get("매출", 11)]        if len(row) > col.get("매출", 11) else ""
+        title        = row[col.get("제목", 1)]        if len(row) > col.get("제목", 1)        else ""
+        product_name = row[col.get("제품명", 2)]      if len(row) > col.get("제품명", 2)      else ""
+        store        = row[col.get("스토어", 3)]       if len(row) > col.get("스토어", 3)       else ""
+        date_from    = row[col.get("시작일", 4)]       if len(row) > col.get("시작일", 4)       else ""
+        date_to      = row[col.get("종료일", 5)]       if len(row) > col.get("종료일", 5)       else ""
+        naver_url    = row[col.get("진행링크", 9)]     if len(row) > col.get("진행링크", 9)     else ""
+        l_revenue    = row[col.get("매출", 11)]        if len(row) > col.get("매출", 11)        else ""
 
-        # M열(공구수수료) 기존값 읽기
-        col_m_idx = col.get("공구수수료(vat포함)", 12)
-        m_existing = row[col_m_idx] if len(row) > col_m_idx else ""
-        m_existing_clean = str(m_existing).strip()
-        m_already_filled = bool(
-            m_existing_clean
-            and m_existing_clean.replace(".", "").isdigit()
-        )
+        # 기존 M값
+        col_m = col.get("공구수수료(vat포함)", 12)
+        m_existing = row[col_m] if len(row) > col_m else ""
+        m_clean = str(m_existing).strip()
+        m_filled = bool(m_clean and m_clean.replace(".", "").isdigit())
 
-        # N열(이익) 기존값 읽기
-        col_n_idx = col.get("이익", 13)
-        n_existing = row[col_n_idx] if len(row) > col_n_idx else ""
-        n_already_filled = bool(str(n_existing).strip())
+        # 기존 N값
+        col_n = col.get("이익", 13)
+        n_existing = row[col_n] if len(row) > col_n else ""
+        n_filled = bool(str(n_existing).strip())
 
         if not title or not date_from or not date_to:
             continue
 
         # L값 파악
         l_clean = str(l_revenue).replace(",", "").strip()
-        l_is_positive = l_clean and l_clean.lstrip("-").isdigit() and int(l_clean) > 0
+        l_positive = l_clean and l_clean.lstrip("-").isdigit() and int(l_clean) > 0
 
         # L, M, N 모두 있으면 완전 스킵
-        if l_is_positive and m_already_filled and n_already_filled:
-            print(f"  [{r_idx}] {title[:30]}: L,M,N열 이미 있음 → 스킵")
+        if l_positive and m_filled and n_filled:
+            print(f"  [{r_idx}] {title[:30]}: L,M,N 이미 있음 → 스킵")
             continue
 
         is_ended = date_to < today_str
@@ -176,24 +204,20 @@ def main():
             print(f"  [{r_idx}] {title[:30]}: 진행중 → 스킵")
             continue
 
-        # ── revenue 결정 ─────────────────────────────────
-        if l_is_positive:
-            # L이 이미 있으면 API 호출 없이 기존값 재사용
+        # ── revenue 결정 ──────────────────────────────────
+        if l_positive:
             revenue = int(l_clean)
-            print(f"  [{r_idx}] {title[:30]}: L열 기존값 재사용({revenue:,}원), M 채우기 시도")
+            print(f"  [{r_idx}] {title[:30]}: L열 재사용({revenue:,}원)")
         else:
-            # L이 없으면 API 조회
             product_no = extract_product_no(naver_url)
             if not product_no:
                 print(f"  [{r_idx}] {title[:30]}: 상품번호 없음 → 스킵")
                 continue
-
             store_lower = store.strip().lower()
             creds = STORE_CREDENTIALS.get(store_lower)
             if not creds or not creds[0]:
                 print(f"  [{r_idx}] {title[:30]}: 스토어 '{store}' 인증정보 없음 → 스킵")
                 continue
-
             print(f"  [{r_idx}] {title[:30]}: 매출 조회 중...")
             try:
                 revenue = naver_api.get_campaign_revenue(
@@ -203,27 +227,50 @@ def main():
                 print(f"       오류: {e}")
                 revenue = ""
 
-        # ── M열 공구수수료 ────────────────────────────────
-        if m_already_filled:
-            # M이 이미 있으면 기존값 유지
-            commission = float(m_existing_clean)
-            print(f"       수수료: 기존값 재사용({commission}%)")
+        # ── commission 결정 ───────────────────────────────
+        if m_filled:
+            commission = float(m_clean)
+            print(f"       수수료: M열 기존값 재사용({commission}%)")
         else:
-            # 1순위: 정확한 채널명 매칭 (소문자)
+            commission = ""
+
+            # 1순위: 채널명 정확 매칭
             commission = comm_map.get(title.lower(), "")
+            if commission != "":
+                print(f"       수수료: 채널명 정확 매칭 '{title}' → {commission}%")
+
+            # 2순위: 채널명 부분 매칭
             if commission == "" and title:
-                # 2순위: 부분 매칭 (title이 key에 포함되거나 key가 title에 포함)
                 t = title.lower()
                 for key, val in comm_map.items():
                     if (len(t) >= 3 and t in key) or (len(key) >= 3 and key in t):
                         commission = val
-                        print(f"       수수료 부분매칭: '{title}' ↔ '{key}' ({val}%)")
+                        print(f"       수수료: 채널명 부분매칭 '{title}' ↔ '{key}' → {commission}%")
                         break
-            if commission == "":
-                print(f"       수수료: comm_map에 '{title}' 없음 (수동 확인 필요)")
 
-        # ── N열 이익 수식 ────────────────────────────────
+            # 3순위: 상품번호 + 캠페인 월 매칭
+            if commission == "":
+                pno_url = extract_product_no(naver_url)
+                campaign_ym = date_from[:7]   # "2026-05"
+                if pno_url and pno_url in comm_by_product_no:
+                    # 캠페인 월과 동일한 탭 항목 우선
+                    for c, ym in comm_by_product_no[pno_url]:
+                        if ym == campaign_ym:
+                            commission = c
+                            print(f"       수수료: 상품번호+월 매칭 {pno_url} ({campaign_ym}) → {commission}%")
+                            break
+
+            if commission == "":
+                print(f"       수수료: 매칭 실패 → 수동 확인 필요")
+
+        # ── 이익 수식 (N열) ───────────────────────────────
         pp = sheets_mod._match_profit(product_name or title, profit_params)
+        matched_name = str(pp.get("name", "")) if pp else ""
+        if matched_name:
+            print(f"       원가매칭: '{matched_name}'")
+        else:
+            print(f"       원가매칭: 실패 → 이익 계산 불가")
+
         n_formula = ""
         revenue_int = revenue if isinstance(revenue, int) else 0
         if pp and revenue_int > 0 and commission != "":
@@ -239,12 +286,11 @@ def main():
                     f"-({delivery}*G{r_idx})"
                 )
 
-        # ── O열 이익률 수식 ──────────────────────────────
         o_formula = f"=IFERROR(N{r_idx}/L{r_idx},\"\")" if n_formula else ""
 
-        updates.append((r_idx, revenue, commission, n_formula, o_formula))
+        updates.append((r_idx, revenue, commission, n_formula, o_formula, matched_name))
         rev_str = f"{revenue:,}원" if isinstance(revenue, int) else str(revenue)
-        print(f"       → 매출={rev_str}, 수수료={commission}%, N={'수식' if n_formula else '없음'}")
+        print(f"       → 매출={rev_str}, 수수료={commission}%, N={'수식있음' if n_formula else '없음'}")
 
     # ── 시트에 일괄 반영 ──────────────────────────────────────
     if not updates:
@@ -252,42 +298,44 @@ def main():
         return
 
     print(f"\n총 {len(updates)}개 행 업데이트 중...")
-    for r_idx, revenue, commission, n_formula, o_formula in updates:
-        # L~O 4개 셀을 USER_ENTERED 모드로 한 번에 업데이트
+    for r_idx, revenue, commission, n_formula, o_formula, matched_name in updates:
         ws_camp.update(
-            f"L{r_idx}:O{r_idx}",
-            [[
+            values=[[
                 revenue    if revenue    != "" else "",
                 commission if commission != "" else "",
                 n_formula,
                 o_formula,
+                matched_name,
             ]],
+            range_name=f"L{r_idx}:P{r_idx}",
             value_input_option="USER_ENTERED",
         )
         print(f"  행{r_idx} 완료")
 
-    # ── O열 이익률 % 서식 ────────────────────────────────────
+    # ── 서식 적용 ─────────────────────────────────────────────
     try:
         requests_body = {"requests": []}
         sheet_id = ws_camp.id
-        # O열 전체 데이터 행에 % 서식 적용
+        n_data = len(data_rows)
+
+        # O열 % 서식
         requests_body["requests"].append({"repeatCell": {
             "range": {
                 "sheetId": sheet_id,
-                "startRowIndex": 1, "endRowIndex": len(data_rows) + 1,
-                "startColumnIndex": 14, "endColumnIndex": 15,  # O열
+                "startRowIndex": 1, "endRowIndex": n_data + 1,
+                "startColumnIndex": 14, "endColumnIndex": 15,
             },
             "cell": {"userEnteredFormat": {
                 "numberFormat": {"type": "PERCENT", "pattern": "0.00%"},
             }},
             "fields": "userEnteredFormat(numberFormat)",
         }})
-        # L, N열 숫자 서식 (#,##0)
-        for col_idx in [11, 13]:  # L=11, N=13
+        # L, N열 숫자 서식
+        for col_idx in [11, 13]:
             requests_body["requests"].append({"repeatCell": {
                 "range": {
                     "sheetId": sheet_id,
-                    "startRowIndex": 1, "endRowIndex": len(data_rows) + 1,
+                    "startRowIndex": 1, "endRowIndex": n_data + 1,
                     "startColumnIndex": col_idx, "endColumnIndex": col_idx + 1,
                 },
                 "cell": {"userEnteredFormat": {
@@ -295,6 +343,14 @@ def main():
                 }},
                 "fields": "userEnteredFormat(numberFormat)",
             }})
+        # P열 너비 자동조정
+        requests_body["requests"].append({"autoResizeDimensions": {
+            "dimensions": {
+                "sheetId": sheet_id,
+                "dimension": "COLUMNS",
+                "startIndex": 15, "endIndex": 16,
+            }
+        }})
         ss.batch_update(requests_body)
         print("서식 적용 완료")
     except Exception as e:

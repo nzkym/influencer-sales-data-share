@@ -176,16 +176,39 @@ def read_profit_params(spreadsheet_url: str) -> list:
 
 
 def _match_profit(product_name: str, profit_params: list) -> dict:
-    """이익계산참고사항 제품명 퍼지 매칭 (짧은 이름이 긴 이름에 포함되는지 확인)."""
+    """이익계산참고사항 제품명 퍼지 매칭.
+    1단계: 특수문자·공백 제거 후 포함 매칭 (기존)
+    2단계: 브래킷 제거 + 키워드 분해 매칭 (60% 이상 일치)
+    """
     if not product_name or not profit_params:
         return {}
     norm = lambda s: re.sub(r'[\s\[\]()（）,./·×X]', '', str(s)).lower()
     name_n = norm(product_name)
+
+    # 1단계: 정규화 후 포함 매칭
     for row in profit_params:
         short = norm(row.get("name", ""))
         if short and len(short) >= 4 and short in name_n:
             return row
-    return {}
+
+    # 2단계: 키워드 분해 매칭
+    # 브래킷 앞 인플루언서명 등 제거 후 핵심 제품명만 추출
+    clean_n = norm(re.sub(r'\[.*?\]', '', product_name))
+    best_score = 0.0
+    best_row = None
+    for row in profit_params:
+        raw = str(row.get("name", "")).lower()
+        keywords = [w for w in re.split(r'[\s,./·×()]+', raw) if len(w) >= 2]
+        if not keywords:
+            continue
+        nkw = [norm(kw) for kw in keywords]
+        matches = sum(1 for kw in nkw if kw and (kw in name_n or kw in clean_n))
+        score = matches / len(keywords)
+        if score > best_score and score >= 0.6:
+            best_score = score
+            best_row = row
+
+    return best_row or {}
 
 
 def read_summary_tab(spreadsheet_url: str) -> dict:
