@@ -132,6 +132,62 @@ def read_totals_from_sheet(sheet_url: str) -> tuple:
     return total_orders, total_products, product_name
 
 
+def read_profit_params(spreadsheet_url: str) -> list:
+    """이익계산참고사항 탭 읽기.
+    반환: [{"name": "뉴트키즈타민", "cost": 4890, "channel_comm": 0.0385, "delivery": 3000}, ...]
+    """
+    try:
+        client = _get_client()
+        sheet_id = _extract_sheet_id(spreadsheet_url)
+        ss = client.open_by_key(sheet_id)
+        ws = ss.worksheet("이익계산참고사항")
+        rows = ws.get_all_values()
+
+        def parse_num(s):
+            try:
+                return float(str(s).replace(",", "").replace("%", "").strip() or 0)
+            except Exception:
+                return 0.0
+
+        def parse_pct(s):
+            s = str(s).strip()
+            try:
+                if s.endswith("%"):
+                    return float(s[:-1]) / 100
+                v = float(s)
+                return v / 100 if v > 1 else v
+            except Exception:
+                return 0.0
+
+        result = []
+        for row in rows[1:]:  # 헤더 스킵
+            if not row or not row[0].strip():
+                continue
+            result.append({
+                "name":         row[0].strip(),
+                "cost":         parse_num(row[3]) if len(row) > 3 else 0,
+                "channel_comm": parse_pct(row[7]) if len(row) > 7 else 0,
+                "delivery":     parse_num(row[8]) if len(row) > 8 else 3000,
+            })
+        return result
+    except Exception as e:
+        print(f"  [이익계산참고사항] 읽기 실패: {e}")
+        return []
+
+
+def _match_profit(product_name: str, profit_params: list) -> dict:
+    """이익계산참고사항 제품명 퍼지 매칭 (짧은 이름이 긴 이름에 포함되는지 확인)."""
+    if not product_name or not profit_params:
+        return {}
+    norm = lambda s: re.sub(r'[\s\[\]()（）,./·×X]', '', str(s)).lower()
+    name_n = norm(product_name)
+    for row in profit_params:
+        short = norm(row.get("name", ""))
+        if short and len(short) >= 4 and short in name_n:
+            return row
+    return {}
+
+
 def read_summary_tab(spreadsheet_url: str) -> dict:
     """'캠페인 실적' 탭 읽기. 반환: {제목: row_dict}"""
     try:
@@ -144,6 +200,14 @@ def read_summary_tab(spreadsheet_url: str) -> dict:
         for row in records:
             title = str(row.get("제목", "")).strip()
             if title:
+                # 캐시된 매출 값 파싱
+                raw_rev = str(row.get("매출", "")).replace(",", "").strip()
+                cached_revenue = int(raw_rev) if raw_rev.lstrip("-").isdigit() else ""
+                raw_comm = str(row.get("공구수수료(vat포함)", "")).replace(",", "").strip()
+                try:
+                    cached_commission = float(raw_comm) if raw_comm else ""
+                except Exception:
+                    cached_commission = ""
                 result[title] = {
                     "title":          title,
                     "product_name":   str(row.get("제품명", "")),
@@ -155,29 +219,82 @@ def read_summary_tab(spreadsheet_url: str) -> dict:
                     "total_products": row.get("제품수", 0),
                     "status":         str(row.get("상태", "")),
                     "updated_at":     str(row.get("업데이트", "")),
+                    "revenue":        cached_revenue,
+                    "commission":     cached_commission,
                 }
         return result
     except Exception:
         return {}
 
 
-def write_summary_tab(spreadsheet_url: str, summary_rows: list):
-    """마스터 시트의 '캠페인 실적' 탭 전체 업데이트."""
+def write_summary_tab(
+    spreadsheet_url: str,
+    summary_rows: list,
+    row_extras: dict = None,
+):
+    """
+    마스터 시트의 '캠페인 실적' 탭 전체 업데이트.
+    row_extras = {제목: {"revenue": int, "commission": float, "profit_params": dict}}
+    → L(매출), M(공구수수료), N(이익 수식), O(이익률 수식) 포함하여 일괄 기록.
+    기존 값이 날아가지 않도록 A-O를 한 번에 씁니다.
+    """
     client = _get_client()
     sheet_id = _extract_sheet_id(spreadsheet_url)
     spreadsheet = client.open_by_key(sheet_id)
 
     try:
         ws = spreadsheet.worksheet("캠페인 실적")
-        # 기존 시트도 열이 부족하면 30열로 확장
         if ws.col_count < 30:
             ws.resize(rows=ws.row_count, cols=30)
     except gspread.WorksheetNotFound:
         ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=30)
 
-    header = ["No", "제목", "제품명", "스토어", "시작일", "종료일", "주문수", "제품수", "상태", "진행링크", "업데이트"]
+    header = [
+        "No", "제목", "제품명", "스토어", "시작일", "종료일",
+        "주문수", "제품수", "상태", "진행링크", "업데이트",
+        "매출", "공구수수료(vat포함)", "이익", "이익률",
+    ]
     values = [header]
+
     for i, row in enumerate(summary_rows, 1):
+        row_sheet = i + 1  # 시트 행 번호 (헤더=1, 데이터 시작=2)
+        extras    = (row_extras or {}).get(row["title"], {})
+
+        # ── L열 매출 ──────────────────────────────
+        revenue = extras.get("revenue")
+        if not isinstance(revenue, int):
+            rev_cached = row.get("revenue", "")
+            revenue = rev_cached if isinstance(rev_cached, int) else ""
+
+        # ── M열 공구수수료 (숫자, 예: 40) ─────────
+        commission = extras.get("commission")
+        if not isinstance(commission, (int, float)):
+            commission = row.get("commission", "")
+            if not isinstance(commission, (int, float)):
+                commission = ""
+
+        # ── N열 이익 수식 ─────────────────────────
+        pp = extras.get("profit_params", {})
+        n_formula = ""
+        if pp and isinstance(revenue, int) and revenue > 0 and commission != "":
+            cost     = int(pp.get("cost", 0) or 0)
+            ch_comm  = float(pp.get("channel_comm", 0) or 0)
+            delivery = int(pp.get("delivery", 3000) or 3000)
+            if cost > 0:
+                n_formula = (
+                    f"=L{row_sheet}"
+                    f"-({cost}*H{row_sheet})"
+                    f"-(L{row_sheet}*(M{row_sheet}/100))"
+                    f"-(L{row_sheet}*{ch_comm})"
+                    f"-({delivery}*G{row_sheet})"
+                )
+
+        # ── O열 이익률 수식 ───────────────────────
+        o_formula = (
+            f"=IFERROR(N{row_sheet}/L{row_sheet},\"\")"
+            if n_formula else ""
+        )
+
         values.append([
             i,
             row["title"],
@@ -190,11 +307,21 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
             row.get("status", ""),
             row.get("url", ""),
             row["updated_at"],
+            revenue if revenue != "" else "",
+            commission if commission != "" else "",
+            n_formula,
+            o_formula,
         ])
 
-    ws.clear()
-    ws.update("A1", values)
+    # ── 시트 전체를 A-O 한 번에 쓰기 (clear 사용하지 않음) ──
+    # 이전 데이터 행이 남지 않도록: 기존 행 수를 파악해 초과분 공백으로 덮어씀
+    old_row_count = ws.row_count
+    ws.update("A1", values, value_input_option="USER_ENTERED")
+    if old_row_count > len(values):
+        blank = [[""] * len(header)] * (old_row_count - len(values))
+        ws.update(f"A{len(values)+1}", blank, value_input_option="USER_ENTERED")
 
+    # ── 서식 적용 ─────────────────────────────────
     requests_body = {"requests": []}
     R = requests_body["requests"]
 
@@ -202,7 +329,9 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
         return {"sheetId": ws.id, "startRowIndex": r1, "endRowIndex": r2,
                 "startColumnIndex": c1, "endColumnIndex": c2}
 
-    # 헤더 서식
+    BLACK = {"red": 0, "green": 0, "blue": 0}
+
+    # 헤더 서식 (A-O)
     R.append({"repeatCell": {
         "range": cell_range(0, 0, 1, len(header)),
         "cell": {"userEnteredFormat": {
@@ -213,18 +342,47 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
         "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
     }})
 
-    # 데이터 행 교대 색상
+    # 데이터 행 교대 색상 (A-K)
     for i in range(len(summary_rows)):
         row_idx = i + 1
         bg = COLOR_ODD_BG if i % 2 == 0 else COLOR_EVEN_BG
         R.append({"repeatCell": {
-            "range": cell_range(row_idx, 0, row_idx + 1, len(header)),
+            "range": cell_range(row_idx, 0, row_idx + 1, 11),  # A-K
             "cell": {"userEnteredFormat": {"backgroundColor": bg}},
             "fields": "userEnteredFormat(backgroundColor)",
         }})
+        # L-O: 연한 초록 배경으로 구분
+        COLOR_LMNO_BG = {"red": 0.90, "green": 0.97, "blue": 0.90}
+        R.append({"repeatCell": {
+            "range": cell_range(row_idx, 11, row_idx + 1, 15),  # L-O
+            "cell": {"userEnteredFormat": {
+                "backgroundColor": COLOR_LMNO_BG,
+                "textFormat": {"bold": False, "foregroundColor": BLACK},
+            }},
+            "fields": "userEnteredFormat(backgroundColor,textFormat)",
+        }})
 
-    # 열 너비 고정 (No/제목/제품명/스토어/시작일/종료일/주문수/제품수/상태/진행링크/업데이트)
-    col_widths = [40, 100, 260, 65, 85, 85, 55, 55, 55, 200, 110]
+    # L열(매출), N열(이익) 숫자 서식 (#,##0)
+    if len(summary_rows) > 0:
+        for col_idx in [11, 13]:  # L=11, N=13
+            R.append({"repeatCell": {
+                "range": cell_range(1, col_idx, len(summary_rows) + 1, col_idx + 1),
+                "cell": {"userEnteredFormat": {
+                    "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
+                }},
+                "fields": "userEnteredFormat(numberFormat)",
+            }})
+        # O열(이익률) 백분율 서식
+        R.append({"repeatCell": {
+            "range": cell_range(1, 14, len(summary_rows) + 1, 15),
+            "cell": {"userEnteredFormat": {
+                "numberFormat": {"type": "PERCENT", "pattern": "0.00%"},
+            }},
+            "fields": "userEnteredFormat(numberFormat)",
+        }})
+
+    # 열 너비 (A-O)
+    col_widths = [40, 100, 260, 65, 85, 85, 55, 55, 55, 200, 110, 100, 70, 100, 70]
     for idx, width in enumerate(col_widths):
         R.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS",

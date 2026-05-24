@@ -351,6 +351,36 @@ def _calc_totals(sales_data: list) -> tuple:
     return total_orders, total_products
 
 
+def _read_master_sheet1_lm() -> dict:
+    """시트1의 I열(매출), J열(공구수수료) 읽기.
+    반환: {제목: {"revenue": int|"", "commission": float|""}}
+    """
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        ss = client.open_by_key(sheet_id)
+        ws = ss.sheet1
+        rows = ws.get_all_records()
+        result = {}
+        for row in rows:
+            title = str(row.get("제목", "")).strip()
+            if not title:
+                continue
+            # I열 매출 (숫자, 쉼표 제거)
+            raw_rev = str(row.get("매출", "")).replace(",", "").strip()
+            revenue = int(raw_rev) if raw_rev.lstrip("-").isdigit() else ""
+            # J열 공구수수료 — 숫자 추출 ("40", "40%", "공구수수료40%" 모두 처리)
+            raw_comm = str(row.get("공구수수료(%,vat포함)", "")).strip()
+            m = re.search(r"(\d+(?:\.\d+)?)", raw_comm)
+            commission = float(m.group(1)) if m else ""
+            result[title] = {"revenue": revenue, "commission": commission}
+        return result
+    except Exception as e:
+        print(f"  [시트1 읽기 실패] {e}")
+        return {}
+
+
 def update_summary_tab():
     """마스터 시트의 '캠페인 실적' 탭 업데이트."""
     KST = timezone(timedelta(hours=9))
@@ -432,7 +462,68 @@ def update_summary_tab():
     all_rows = new_rows + kept_rows
     all_rows.sort(key=lambda r: str(r.get("date_to", "")), reverse=True)
 
-    sheets.write_summary_tab(MASTER_SHEET_URL, all_rows)
+    # ── L/M/N/O열 계산 ────────────────────────────────────────
+    # 이익계산참고사항 로드
+    profit_params = []
+    try:
+        profit_params = sheets.read_profit_params(MASTER_SHEET_URL)
+    except Exception as e:
+        print(f"  [이익참고] 읽기 실패: {e}")
+
+    # 시트1의 I(매출), J(공구수수료) 로드
+    master1_lm = _read_master_sheet1_lm()
+
+    # 캠페인 제목 → 인증정보 맵
+    title_to_campaign = {c["title"]: c for c in all_campaigns}
+
+    KST = timezone(timedelta(hours=9))
+    today_str = datetime.now(KST).date().strftime("%Y-%m-%d")
+
+    row_extras = {}
+    for row in all_rows:
+        title = row["title"]
+        campaign = title_to_campaign.get(title, {})
+        is_ended = str(row.get("date_to", "")) < today_str
+
+        # ── 매출 ──────────────────────────────────────────────
+        # 우선순위: 시트1 I열 → 캠페인실적 L열 캐시 → API 조회
+        s1_revenue = master1_lm.get(title, {}).get("revenue", "")
+        cached_rev = row.get("revenue", "")
+
+        if isinstance(s1_revenue, int) and s1_revenue > 0:
+            revenue = s1_revenue                           # 시트1에 수기 입력값
+        elif is_ended and isinstance(cached_rev, int) and cached_rev > 0:
+            revenue = cached_rev                           # 종료 캠페인 캐시 재사용
+        elif campaign:
+            # API 조회 (진행중은 매번, 종료는 캐시 없을 때만)
+            try:
+                revenue = naver_api.get_campaign_revenue(
+                    campaign["api_id"], campaign["api_secret"],
+                    campaign["product_no"],
+                    campaign["date_from"], campaign["date_to"],
+                )
+            except Exception as e:
+                print(f"  [매출조회 실패] {title}: {e}")
+                revenue = cached_rev if isinstance(cached_rev, int) else ""
+        else:
+            revenue = cached_rev if isinstance(cached_rev, int) else ""
+
+        # ── 공구수수료 ────────────────────────────────────────
+        # 우선순위: 시트1 J열 → 캠페인실적 M열 캐시
+        s1_comm = master1_lm.get(title, {}).get("commission", "")
+        commission = s1_comm if s1_comm != "" else row.get("commission", "")
+
+        # ── 이익계산참고사항 매칭 ─────────────────────────────
+        product_name = row.get("product_name", "") or title
+        pp = sheets._match_profit(product_name, profit_params)
+
+        row_extras[title] = {
+            "revenue":       revenue,
+            "commission":    commission,
+            "profit_params": pp,
+        }
+
+    sheets.write_summary_tab(MASTER_SHEET_URL, all_rows, row_extras=row_extras)
     print(f"  → 캠페인 실적 탭 업데이트 완료\n")
 
 

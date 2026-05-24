@@ -200,6 +200,77 @@ def get_sales_data(
     return result, product_name
 
 
+def get_campaign_revenue(
+    client_id: str,
+    client_secret: str,
+    product_no: str,
+    date_from: str,
+    date_to: str,
+) -> int:
+    """
+    캠페인 기간 동안 특정 상품의 총 매출(결제금액) 반환.
+    취소·반품 제외(SALE_STATUSES 기준). 반환값: 원 단위 정수.
+    """
+    token = _get_access_token(client_id, client_secret)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    print(f"  → [매출조회] 상품번호: {product_no}, 기간: {date_from} ~ {date_to}")
+
+    current = datetime.strptime(date_from, "%Y-%m-%d")
+    end     = datetime.strptime(date_to,   "%Y-%m-%d")
+    today   = datetime.now()
+
+    order_ids = []
+    while current <= min(end, today):
+        next_day = current + timedelta(days=1)
+        from_str = current.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+        to_str   = next_day.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+
+        day_items = _query_one_day(headers, from_str, to_str)
+        for item in day_items:
+            content = item.get("content", {})
+            po      = content.get("productOrder", {})
+            if str(po.get("productId", "")) != str(product_no):
+                continue
+            if po.get("productOrderStatus", "") not in SALE_STATUSES:
+                continue
+            oid = str(item.get("productOrderId", ""))
+            if oid:
+                order_ids.append(oid)
+        current = next_day
+
+    if not order_ids:
+        print(f"  → [매출조회] 주문 없음 → 0원")
+        return 0
+
+    # 100개씩 나눠서 query 엔드포인트 호출 → 결제금액 합산
+    total_revenue = 0
+    for start in range(0, len(order_ids), 100):
+        chunk = order_ids[start:start + 100]
+        resp = requests.post(
+            f"{BASE_URL}/external/v1/pay-order/seller/product-orders/query",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"productOrderIds": chunk},
+            timeout=30,
+        )
+        if not resp.ok:
+            print(f"  → [매출조회] 쿼리 실패: {resp.status_code}")
+            continue
+        for order in resp.json().get("data", []):
+            po = order.get("productOrder", {})
+            # 결제금액 필드 우선순위 탐색
+            amount = (
+                po.get("totalPaymentAmount")
+                or po.get("productAmount")
+                or (int(po.get("unitPrice", 0) or 0)
+                    * int(po.get("quantity", 1) or 1))
+            )
+            total_revenue += int(amount or 0)
+
+    print(f"  → [매출조회] {len(order_ids)}건, 합계 {total_revenue:,}원")
+    return total_revenue
+
+
 def get_pharmabros_orders(
     client_id: str,
     client_secret: str,
