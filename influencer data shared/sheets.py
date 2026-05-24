@@ -170,7 +170,7 @@ def write_summary_tab(spreadsheet_url: str, summary_rows: list):
     try:
         ws = spreadsheet.worksheet("캠페인 실적")
     except gspread.WorksheetNotFound:
-        ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=10)
+        ws = spreadsheet.add_worksheet(title="캠페인 실적", rows=200, cols=30)
 
     header = ["No", "제목", "제품명", "스토어", "시작일", "종료일", "주문수", "제품수", "상태", "진행링크", "업데이트"]
     values = [header]
