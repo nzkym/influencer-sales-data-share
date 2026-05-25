@@ -43,6 +43,12 @@ STORE_CREDENTIALS = {
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID")
 
+# 공구수수료 별도 시트 (fill_lmno.py와 동일)
+COMM_SHEET_URL = os.getenv(
+    "COMM_SHEET_URL",
+    "https://docs.google.com/spreadsheets/d/1tNYLgKB-rXcwF5ZdjxT3xti4ygvNl6SEJ-x0w8Gmjt0/edit",
+)
+
 CREDENTIALS_PATH = str(BASE_DIR / "credentials" / "google-credentials.json")
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -381,6 +387,92 @@ def _read_master_sheet1_lm() -> dict:
         return {}
 
 
+def _extract_commission_raw(raw: str):
+    """수수료 문자열에서 숫자 추출. '공구수수료40%', '40%', '40' 모두 처리."""
+    s = str(raw).strip()
+    m = re.search(r'공구수수료\s*(\d+(?:\.\d+)?)\s*%', s)
+    if m:
+        return float(m.group(1))
+    if '컨텐츠' not in s:
+        m = re.search(r'(\d+(?:\.\d+)?)', s)
+        if m:
+            return float(m.group(1))
+    return ""
+
+
+def _tab_year_month(tab_title: str) -> str:
+    """탭 제목에서 'YYYY-MM' 추출. '26.4', '4월' 등 처리."""
+    t = tab_title.strip()
+    m = re.match(r'(\d{2})\.(\d{1,2})', t)
+    if m:
+        return f"20{m.group(1)}-{int(m.group(2)):02d}"
+    m2 = re.match(r'(\d{1,2})\s*월', t)
+    if m2:
+        return f"2026-{int(m2.group(1)):02d}"
+    return ""
+
+
+def _read_comm_map() -> tuple:
+    """공구수수료 시트에서 채널명→수수료 매핑 읽기.
+    반환: (comm_map, comm_by_product_no)
+      comm_map             = {채널명(소문자): 수수료율(float)}
+      comm_by_product_no   = {상품번호: [(수수료율, "YYYY-MM"), ...]}
+    """
+    comm_map = {}
+    comm_by_product_no = {}
+    if not COMM_SHEET_URL:
+        return comm_map, comm_by_product_no
+    try:
+        creds  = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        comm_sid = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", COMM_SHEET_URL).group(1)
+        ss_comm  = client.open_by_key(comm_sid)
+
+        def _pno(url):
+            m = re.search(r"/products/(\d+)", str(url))
+            return m.group(1) if m else ""
+
+        for ws_tab in ss_comm.worksheets():
+            title_lower = ws_tab.title.lower()
+            if not any(x in title_lower for x in ["월", ".1", ".2", ".3", ".4", ".5", ".6"]):
+                continue
+            ym = _tab_year_month(ws_tab.title)
+            try:
+                tab_rows = ws_tab.get_all_values()
+            except Exception:
+                continue
+            i = 0
+            while i < len(tab_rows):
+                row = tab_rows[i]
+                b_col = row[1].strip() if len(row) > 1 else ""
+                d_col = row[3].strip() if len(row) > 3 else ""
+                if b_col == "공구" and d_col:
+                    channel = d_col
+                    j = i + 1
+                    while j < len(tab_rows):
+                        nrow = tab_rows[j]
+                        nb = nrow[1].strip() if len(nrow) > 1 else ""
+                        if nb == "공구":
+                            break
+                        if nb == "공구링크":
+                            m_val = nrow[12].strip() if len(nrow) > 12 else ""
+                            comm  = _extract_commission_raw(m_val)
+                            if comm != "":
+                                if channel:
+                                    comm_map[channel.lower()] = comm
+                                for cell in nrow:
+                                    pno = _pno(str(cell))
+                                    if pno and ym:
+                                        comm_by_product_no.setdefault(pno, []).append((comm, ym))
+                        j += 1
+                    i = j
+                else:
+                    i += 1
+    except Exception as e:
+        print(f"  [공구수수료 시트 읽기 실패] {e}")
+    return comm_map, comm_by_product_no
+
+
 def update_summary_tab():
     """마스터 시트의 '캠페인 실적' 탭 업데이트."""
     KST = timezone(timedelta(hours=9))
@@ -473,6 +565,9 @@ def update_summary_tab():
     # 시트1 J열(공구수수료) 로드 (시트 읽기, 1회)
     master1_lm = _read_master_sheet1_lm()
 
+    # 공구수수료 별도 시트 로드 (시트1에 수수료 없는 행 대비 fallback)
+    comm_map, comm_by_product_no = _read_comm_map()
+
     # 새로 집계되는 캠페인 제목 집합 (이 타이밍에만 매출 API 호출)
     fetch_titles   = {r["title"] for r in new_rows}
     title_to_campaign = {c["title"]: c for c in all_campaigns}
@@ -507,9 +602,33 @@ def update_summary_tab():
                 else:
                     revenue = ""
 
-        # ── 공구수수료(M): 시트1 J열 항상 최신값 반영 ───────────
+        # ── 공구수수료(M): 시트1 J열 우선, 없으면 캐시, 그래도 없으면 공구수수료 시트 fallback ──
         s1_comm    = master1_lm.get(title, {}).get("commission", "")
         commission = s1_comm if s1_comm != "" else row.get("commission", "")
+
+        if commission == "" and comm_map:
+            # 1순위: 채널명 정확 매칭
+            commission = comm_map.get(title.lower(), "")
+            # 2순위: 채널명 부분 매칭
+            if commission == "":
+                t_lower = title.lower()
+                for key, val in comm_map.items():
+                    if (len(t_lower) >= 3 and t_lower in key) or (len(key) >= 3 and key in t_lower):
+                        commission = val
+                        print(f"  [수수료 부분매칭] '{title}' ↔ '{key}' → {val}%")
+                        break
+            # 3순위: 상품번호 + 캠페인 월 매칭
+            if commission == "":
+                row_url = row.get("url", "") or ""
+                pno_m = re.search(r"/products/(\d+)", str(row_url))
+                if pno_m:
+                    pno        = pno_m.group(1)
+                    campaign_ym = str(row.get("date_from", ""))[:7]
+                    for c, ym in comm_by_product_no.get(pno, []):
+                        if ym == campaign_ym:
+                            commission = c
+                            print(f"  [수수료 상품번호+월 매칭] '{title}' → {c}%")
+                            break
 
         # ── 옵션별 원가 계산 (멀티제품 캠페인) ──────────────────
         # 새로 종료된 캠페인(fetch_titles)에만 개별 시트 읽기 실행
