@@ -30,6 +30,33 @@ from googleapiclient.http import MediaIoBaseUpload
 KST = timezone(timedelta(hours=9))
 
 
+# ── 영업일 계산 (한국 공휴일 + 주말 제외) ─────────────────
+def _business_days_after(start, n: int):
+    """start 날짜로부터 한국 공휴일·주말 제외 n 영업일 후 날짜 반환."""
+    from datetime import date as _date
+    try:
+        import holidays as _hols
+        kr = _hols.KR(years=range(start.year, start.year + 2))
+    except ImportError:
+        kr = {}
+    current = start
+    count = 0
+    while count < n:
+        current += timedelta(days=1)
+        if current.weekday() < 5 and current not in kr:   # 평일 + 비공휴일
+            count += 1
+    return current
+
+
+def get_delete_date(end_date_str: str):
+    """최종 파일 자동삭제 날짜 반환 (최종 업로드일로부터 3 영업일 후).
+    최종 업로드일 = end_date + 1일.
+    """
+    end        = _parse_date(end_date_str)
+    final_day  = end + timedelta(days=1)   # 종료일 다음날 = 최종 업로드일
+    return _business_days_after(final_day, 3)
+
+
 def now_kst() -> datetime:
     return datetime.now(KST)
 
@@ -342,3 +369,29 @@ def run_pharmabros(
     print(f"  [파마브로스] ✅ 업로드 완료: {file_name}")
     print(f"  [파마브로스] 폴더: {folder_url}")
     return folder_url, [(file_name, file_url)]
+
+
+def delete_campaign_files(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    folder_id: str,
+    title: str,
+) -> list:
+    """드라이브 폴더에서 해당 캠페인 파일 전부 삭제. 삭제된 파일명 목록 반환."""
+    service     = _drive_service_oauth(client_id, client_secret, refresh_token)
+    safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+
+    all_files = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(id,name)",
+    ).execute().get("files", [])
+
+    deleted = []
+    for f in all_files:
+        if f["name"].startswith(safe_prefix):
+            service.files().delete(fileId=f["id"]).execute()
+            deleted.append(f["name"])
+            print(f"  [Drive] 자동 삭제: {f['name']}")
+
+    return deleted

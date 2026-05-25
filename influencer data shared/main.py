@@ -259,21 +259,23 @@ def load_pharmabros_campaigns() -> list:
             start_date = parse_date(start_str)
             end_date   = parse_date(end_str)
 
-            is_active = start_date <= today <= end_date
+            is_active    = start_date <= today <= end_date
             is_final_day = (today == end_date + timedelta(days=1))
+            is_delete_day = (today == pharmabros.get_delete_date(end_str))
 
-            if not (is_active or is_final_day):
+            if not (is_active or is_final_day or is_delete_day):
                 continue
 
             campaigns.append({
-                "title":      title,
-                "product_no": extract_product_no(url),
-                "url":        url,
-                "date_from":  start_date.strftime("%Y-%m-%d"),
-                "date_to":    end_date.strftime("%Y-%m-%d"),
-                "api_id":     api_id,
-                "api_secret": api_secret,
-                "is_final":   is_final_day,
+                "title":         title,
+                "product_no":    extract_product_no(url),
+                "url":           url,
+                "date_from":     start_date.strftime("%Y-%m-%d"),
+                "date_to":       end_date.strftime("%Y-%m-%d"),
+                "api_id":        api_id,
+                "api_secret":    api_secret,
+                "is_final":      is_final_day,
+                "is_delete_day": is_delete_day,
             })
         except Exception as e:
             print(f"  [경고] 파마브로스 행 파싱 오류: {e}")
@@ -805,7 +807,29 @@ def _run_pharmabros_if_needed(force: bool = False):
     print(f"\n  [파마브로스] 대상 캠페인 {len(pb_campaigns)}개 확인")
 
     for campaign in pb_campaigns:
-        title      = campaign["title"]
+        title = campaign["title"]
+
+        # ── 자동 삭제 대상일 처리 ────────────────────────────
+        if campaign.get("is_delete_day"):
+            now_h = datetime.now(timezone(timedelta(hours=9))).hour
+            if not force and now_h != 10:
+                print(f"  [파마브로스] '{title[:30]}' — 삭제 예정일이나 10시 아님, 스킵")
+                continue
+            try:
+                deleted = pharmabros.delete_campaign_files(
+                    client_id=PHARMABROS_OAUTH_CLIENT_ID,
+                    client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+                    refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+                    folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+                    title=title,
+                )
+                if deleted:
+                    print(f"  [파마브로스] 🗑️ '{title[:30]}' 최종 파일 자동 삭제 완료: {deleted}")
+                else:
+                    print(f"  [파마브로스] '{title[:30]}' 삭제할 파일 없음 (이미 삭제됨)")
+            except Exception as e:
+                print(f"  [파마브로스 삭제 오류] {e}")
+            continue  # 업로드 로직은 실행하지 않음
         start_date = campaign["date_from"]
         end_date   = campaign["date_to"]
         is_final   = campaign["is_final"]
