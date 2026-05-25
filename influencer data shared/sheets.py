@@ -778,7 +778,7 @@ def write_to_sheet(
     # 행5: 빈 줄
     values.append(["", "", "", "", "", ""])
     # 행6: 헤더
-    values.append(["날짜", "옵션", "주문수", "제품수", "", "🏆 옵션별 순위", "총 주문수"])
+    values.append(["날짜", "옵션", "주문수", "제품수", "", "", "🏆 옵션별 순위", "총 주문수"])
 
     DATA_START_ROW = 8  # 0-indexed (행1~8: 정보행, 행9: 헤더)
 
@@ -804,11 +804,12 @@ def write_to_sheet(
                 row["daily_orders"],
                 row["daily_products"],
                 "",
+                "",
                 rank_label,
                 rank_orders if rank_label else "",
             ])
     else:
-        values.append(["", "아직 판매 데이터가 없습니다", "", "", "", "", ""])
+        values.append(["", "아직 판매 데이터가 없습니다", "", "", "", "", "", ""])
 
     data_end_row = len(values)
 
@@ -987,7 +988,7 @@ def write_to_sheet(
     # 순위 헤더 (행6 F~G)
     COLOR_RANK_HEADER = {"red": 0.95, "green": 0.76, "blue": 0.20}
     R.append({"repeatCell": {
-        "range": cell_range(DATA_START_ROW, 5, DATA_START_ROW + 1, 7),
+        "range": cell_range(DATA_START_ROW, 6, DATA_START_ROW + 1, 8),
         "cell": {"userEnteredFormat": {
             "backgroundColor": COLOR_RANK_HEADER,
             "textFormat": {"bold": True, "foregroundColor": BLACK},
@@ -1011,7 +1012,7 @@ def write_to_sheet(
         }})
         # 순위 열 (F~G)
         R.append({"repeatCell": {
-            "range": cell_range(row_idx, 5, row_idx + 1, 7),
+            "range": cell_range(row_idx, 6, row_idx + 1, 8),
             "cell": {"userEnteredFormat": {
                 "backgroundColor": COLOR_RANK_BG,
                 "textFormat": {"bold": i < 3, "foregroundColor": BLACK},
@@ -1026,9 +1027,9 @@ def write_to_sheet(
         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
         "fields": "userEnteredFormat(horizontalAlignment)",
     }})
-    # G열(순위 주문수) 가운데 정렬
+    # H열(순위 주문수) 가운데 정렬
     R.append({"repeatCell": {
-        "range": cell_range(DATA_START_ROW + 1, 6, data_end_row, 7),
+        "range": cell_range(DATA_START_ROW + 1, 7, data_end_row, 8),
         "cell": {"userEnteredFormat": {"horizontalAlignment": "CENTER"}},
         "fields": "userEnteredFormat(horizontalAlignment)",
     }})
@@ -1038,7 +1039,7 @@ def write_to_sheet(
         "sheetId": ws.id, "dimension": "COLUMNS",
         "startIndex": 0, "endIndex": 2,
     }}})
-    for col_idx, width in [(2, 80), (3, 80), (4, 20), (5, 220), (6, 80)]:
+    for col_idx, width in [(2, 80), (3, 80), (4, 80), (5, 80), (6, 220), (7, 80)]:
         R.append({"updateDimensionProperties": {
             "range": {"sheetId": ws.id, "dimension": "COLUMNS",
                       "startIndex": col_idx, "endIndex": col_idx + 1},
