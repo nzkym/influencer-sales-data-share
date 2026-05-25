@@ -1123,6 +1123,64 @@ def write_to_sheet(
             },
         }}})
 
+        # ── 제품별 누적 차트 (멀티제품 전용) ─────────────────────────
+        if is_multi_product and len(unique_products) >= 2:
+            _PROD_COLORS = [
+                {"red": 0.24, "green": 0.70, "blue": 0.44},  # 초록
+                {"red": 0.62, "green": 0.32, "blue": 0.79},  # 보라
+                {"red": 0.98, "green": 0.74, "blue": 0.02},  # 노랑
+                {"red": 0.90, "green": 0.29, "blue": 0.24},  # 빨강
+                {"red": 0.20, "green": 0.63, "blue": 0.79},  # 청록
+            ]
+            _prod_series = []
+            for _pi in range(len(unique_products)):
+                _ci = 3 + _pi  # D=3, E=4, F=5 ...
+                _prod_series.append({
+                    "series": {"sourceRange": {"sources": [{
+                        "sheetId": ws.id,
+                        "startRowIndex": chart_start,
+                        "endRowIndex": chart_end,
+                        "startColumnIndex": _ci,
+                        "endColumnIndex": _ci + 1,
+                    }]}},
+                    "targetAxis": "LEFT_AXIS",
+                    "color": _PROD_COLORS[_pi % len(_PROD_COLORS)],
+                })
+            R.append({"addChart": {"chart": {
+                "spec": {
+                    "title": "제품별 제품수 비중",
+                    "titleTextFormat": {"bold": True, "fontSize": 12},
+                    "basicChart": {
+                        "chartType": "COLUMN",
+                        "stackedType": "STACKED",
+                        "legendPosition": "BOTTOM_LEGEND",
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "날짜",
+                             "titleTextPosition": {"horizontalAlignment": "CENTER"}},
+                            {"position": "LEFT_AXIS",   "title": "제품수",
+                             "titleTextPosition": {"horizontalAlignment": "CENTER"}},
+                        ],
+                        "domains": [{"domain": {"sourceRange": {"sources": [{
+                            "sheetId": ws.id,
+                            "startRowIndex": chart_start,
+                            "endRowIndex": chart_end,
+                            "startColumnIndex": 0, "endColumnIndex": 1,
+                        }]}}}],
+                        "series": _prod_series,
+                        "headerCount": 1,
+                    },
+                },
+                "position": {"overlayPosition": {
+                    "anchorCell": {
+                        "sheetId": ws.id,
+                        "rowIndex": data_end_row + 1,
+                        "columnIndex": 7,  # 기존 차트 오른쪽
+                    },
+                    "widthPixels": 480,
+                    "heightPixels": 320,
+                }},
+            }}})
+
     # ── 시간대별 섹션 서식 (정확한 인덱스 기반) ──────────
     COLOR_SECTION_BG = {"red": 0.18, "green": 0.18, "blue": 0.28}
     COLOR_HDR        = {"red": 0.25, "green": 0.47, "blue": 0.78}
