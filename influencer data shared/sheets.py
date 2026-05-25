@@ -177,8 +177,10 @@ def read_profit_params(spreadsheet_url: str) -> list:
 
 def _match_profit(product_name: str, profit_params: list) -> dict:
     """이익계산참고사항 제품명 퍼지 매칭.
-    1단계: 특수문자·공백 제거 후 포함 매칭 (기존)
-    2단계: 브래킷 제거 + 키워드 분해 매칭 (60% 이상 일치)
+    1단계: 특수문자·공백 제거 후 포함 매칭
+    2단계: 브래킷 제거 + 키워드 분해 매칭
+           - 단어 경계 기준 매칭 (공백 제거 artifact 방지)
+           - 매칭 수(count) 우선, 동점 시 비율(ratio)로 결정
     """
     if not product_name or not profit_params:
         return {}
@@ -192,26 +194,52 @@ def _match_profit(product_name: str, profit_params: list) -> dict:
             return row
 
     # 2단계: 키워드 분해 매칭
-    # 브래킷 앞 인플루언서명 등 제거 후 핵심 제품명만 추출
-    clean_n = norm(re.sub(r'\[.*?\]', '', product_name))
-    best_score = 0.0
-    best_row = None
+    clean_raw = re.sub(r'\[.*?\]', '', product_name)
+    clean_n   = norm(clean_raw)
+
+    # 단어 경계 매칭용: 공백 보존 버전 (교차 연결 artifact 방지)
+    # 예) "오메가3 30캡슐" → 공백 제거 시 "오메가330캡슐"에서 "30캡슐"이 오매칭될 수 있음
+    norm_wb  = lambda s: re.sub(r'[\[\]()（）,./·×X]', '', str(s)).lower()
+    clean_wb = re.sub(r'\s+', ' ', norm_wb(clean_raw)).strip()
+    name_wb  = re.sub(r'\s+', ' ', norm_wb(product_name)).strip()
+
+    def _kw_match(kw: str) -> bool:
+        if not kw:
+            return False
+        kw_n = norm(kw)
+        # 단어 경계 매칭 (공백 기준): "30캡슐"이 "오메가330캡슐"에 오매칭되는 것 방지
+        wb_ok = ((' ' + kw + ' ') in (' ' + clean_wb + ' ')
+                 or (' ' + kw + ' ') in (' ' + name_wb + ' ')
+                 or clean_wb.startswith(kw + ' ') or clean_wb.endswith(' ' + kw)
+                 or name_wb.startswith(kw + ' ')  or name_wb.endswith(' ' + kw))
+        # 공백 제거 버전도 확인 (복합어 보조 — 단어 경계 매칭이 실패한 경우만)
+        rm_ok = kw_n in clean_n or kw_n in name_n
+        return wb_ok or (rm_ok and not any(
+            # 공백 제거로 인해 숫자가 합쳐지는 패턴이면 rm_ok만으로는 인정 안 함
+            c.isdigit() for c in (kw_n[:1] if kw_n else '')
+        ))
+
+    best_matches = 0
+    best_score   = 0.0
+    best_row     = None
+
     for row in profit_params:
         raw = str(row.get("name", "")).lower()
         keywords = [w for w in re.split(r'[\s,./·×()]+', raw) if len(w) >= 2]
         if not keywords:
             continue
-        nkw = [norm(kw) for kw in keywords]
-        matches = sum(1 for kw in nkw if kw and (kw in name_n or kw in clean_n))
-        # 최소 2개 키워드 일치 (단일 '뉴트원'만으로 오매칭 방지)
+        matches = sum(1 for kw in keywords if _kw_match(kw))
+        # 최소 2개 키워드 일치
         if matches < 2:
             continue
         score = matches / len(keywords)
-        if score > best_score:
-            best_score = score
-            best_row = row
+        # 매칭 수(count) 우선, 동점 시 비율(score)로 결정
+        # → 키워드 많은 긴 이름이 비율 때문에 불이익 받는 것 방지
+        if (matches, score) > (best_matches, best_score):
+            best_matches = matches
+            best_score   = score
+            best_row     = row
 
-    # P열에서 검증 가능하므로 최선의 결과를 항상 반환
     return best_row or {}
 
 
