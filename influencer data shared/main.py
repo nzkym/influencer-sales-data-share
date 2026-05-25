@@ -547,7 +547,14 @@ def update_summary_tab():
         changed = True
 
     if not changed and not new_rows:
-        return
+        # 매출은 있는데 수수료가 없는 기존 행이 있으면 채우기 위해 계속 진행
+        needs_fill = any(
+            isinstance(row.get("revenue"), int) and row["revenue"] > 0
+            and row.get("commission", "") == ""
+            for row in existing.values()
+        )
+        if not needs_fill:
+            return
 
     new_titles = {r["title"] for r in new_rows}
     kept_rows = [r for r in existing.values() if r["title"] not in new_titles]
