@@ -1271,6 +1271,62 @@ def write_to_sheet(
             }},
         }}})
 
+        # ── 시간대별 제품별 누적 차트 (멀티제품 전용) ────────────────
+        if is_multi_product and len(unique_products) >= 2:
+            _PROD_COLORS_H = [
+                {"red": 0.24, "green": 0.70, "blue": 0.44},
+                {"red": 0.62, "green": 0.32, "blue": 0.79},
+                {"red": 0.98, "green": 0.74, "blue": 0.02},
+                {"red": 0.90, "green": 0.29, "blue": 0.24},
+                {"red": 0.20, "green": 0.63, "blue": 0.79},
+            ]
+            _hprod_series = []
+            for _pi in range(len(unique_products)):
+                _ci = 3 + _pi  # D=3, E=4, F=5 ...
+                _hprod_series.append({
+                    "series": {"sourceRange": {"sources": [{
+                        "sheetId": ws.id,
+                        "startRowIndex": HOURLY_CHART_DATA_START,
+                        "endRowIndex":   HOURLY_CHART_DATA_END,
+                        "startColumnIndex": _ci,
+                        "endColumnIndex": _ci + 1,
+                    }]}},
+                    "targetAxis": "LEFT_AXIS",
+                    "color": _PROD_COLORS_H[_pi % len(_PROD_COLORS_H)],
+                })
+            R.append({"addChart": {"chart": {
+                "spec": {
+                    "title": "시간대별 제품별 제품수 비중",
+                    "titleTextFormat": {"bold": True, "fontSize": 12},
+                    "basicChart": {
+                        "chartType": "COLUMN",
+                        "stackedType": "STACKED",
+                        "legendPosition": "BOTTOM_LEGEND",
+                        "axis": [
+                            {"position": "BOTTOM_AXIS", "title": "시간대",
+                             "titleTextPosition": {"horizontalAlignment": "CENTER"}},
+                            {"position": "LEFT_AXIS",   "title": "제품수",
+                             "titleTextPosition": {"horizontalAlignment": "CENTER"}},
+                        ],
+                        "domains": [{"domain": {"sourceRange": {"sources": [{
+                            "sheetId": ws.id,
+                            "startRowIndex": HOURLY_CHART_DATA_START,
+                            "endRowIndex":   HOURLY_CHART_DATA_END,
+                            "startColumnIndex": 0, "endColumnIndex": 1,
+                        }]}}}],
+                        "series": _hprod_series,
+                        "headerCount": 1,
+                    },
+                },
+                "position": {"overlayPosition": {
+                    "anchorCell": {
+                        "sheetId": ws.id,
+                        "rowIndex": HOURLY_CHART_ANCHOR,
+                        "columnIndex": 10,  # 기존 시간대별 차트 오른쪽
+                    },
+                    "widthPixels": 700, "heightPixels": 320,
+                }},
+            }}})
 
     spreadsheet.batch_update(requests_body)
 
