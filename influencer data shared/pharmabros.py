@@ -251,6 +251,17 @@ def upload_to_drive(
         file_id = uploaded["id"]
         print(f"  [Drive] 업로드 완료: {file_name}")
 
+    # 최종 업로드 시 정기 파일(_판매현황.xlsx) 자동 삭제
+    if file_name.endswith("_판매현황_최종.xlsx"):
+        interim_name = file_name.replace("_판매현황_최종.xlsx", "_판매현황.xlsx")
+        old_files = service.files().list(
+            q=f"name='{interim_name}' and '{folder_id}' in parents and trashed=false",
+            fields="files(id,name)",
+        ).execute().get("files", [])
+        for f in old_files:
+            service.files().delete(fileId=f["id"]).execute()
+            print(f"  [Drive] 정기 파일 삭제: {f['name']}")
+
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
