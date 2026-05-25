@@ -84,6 +84,40 @@ def _extract_box_count(option: str, unit_keyword: str = "") -> int:
     return 1
 
 
+def _extract_product_key(option: str) -> str:
+    """옵션명에서 제품 식별 키 추출 (멀티제품 캠페인 전용).
+    '뉴트원 유산균 / 2BOX'            → '뉴트원 유산균'
+    '뉴트원알티지오메가3 / 4BOX'       → '뉴트원알티지오메가3'
+    '선택: 12BOX(50%)'                 → ''  (단일제품 옵션)
+    """
+    s = str(option).strip()
+    if "/" in s:
+        left = s.split("/", 1)[0].strip()
+        # 왼쪽에 BOX 패턴 없으면 제품명으로 판단
+        if not re.search(r'\d+\s*(?:BOX|박스|bx)', left, re.IGNORECASE):
+            return left
+    # / 없거나 왼쪽에 BOX가 있는 경우 → 단일제품 형태
+    stripped = re.sub(r'선택\s*[:：]\s*', '', s)
+    stripped = re.sub(r'\d+\s*(?:BOX|박스|bx|개입|구|정|캡슐|세트|팩)', '', stripped, flags=re.IGNORECASE)
+    stripped = re.sub(r'[\(\[\（].*?[\)\]\）]', '', stripped)
+    stripped = re.sub(r'\d+', '', stripped).strip()
+    return stripped if len(stripped) >= 2 else ''
+
+
+def _short_product_label(key: str) -> str:
+    """제품 키에서 브랜드명 제거 후 짧은 표시 이름 반환.
+    '뉴트원 유산균'       → '유산균'
+    '뉴트원알티지오메가3'  → '알티지오메가3'
+    """
+    s = str(key).strip()
+    for brand in sorted(_BRAND_WORDS, key=len, reverse=True):
+        pat = re.compile(re.escape(brand), re.IGNORECASE)
+        s_new = pat.sub('', s).strip()
+        if s_new and s_new != s:
+            return s_new
+    return s
+
+
 def _aggregate(sales_data: list, unit_keyword: str = "") -> list:
     """날짜×옵션별 집계 (주문수 + 제품수)"""
     agg = defaultdict(lambda: defaultdict(int))
@@ -663,6 +697,28 @@ def write_to_sheet(
     total_products = sum(r["products"] for r in daily_totals)
     updated_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M:%S")
 
+    # ── 멀티제품 감지 ─────────────────────────────────────────────────
+    # 옵션명에서 제품 키를 추출해 고유 제품 목록을 파악 (순서 보존)
+    _seen_pks: set = set()
+    unique_products: list = []
+    for _r in aggregated:
+        _pk = _extract_product_key(_r["option"])
+        if _pk and _pk not in _seen_pks:
+            _seen_pks.add(_pk)
+            unique_products.append(_pk)
+
+    is_multi_product = len(unique_products) >= 2
+
+    # 제품별 총 제품수 / 날짜별 제품수 집계 (멀티제품 시만 계산)
+    prod_product_totals: dict = defaultdict(int)          # {product_key: total_products}
+    date_prod_products: dict = defaultdict(lambda: defaultdict(int))  # {date: {pk: products}}
+    if is_multi_product:
+        for _r in aggregated:
+            _pk = _extract_product_key(_r["option"])
+            if _pk:
+                prod_product_totals[_pk] += _r["daily_products"]
+                date_prod_products[_r["date"]][_pk] += _r["daily_products"]
+
     # D+일 계산
     try:
         start = datetime.strptime(date_from, "%Y-%m-%d").date()
@@ -700,16 +756,23 @@ def write_to_sheet(
     values.append([f"📦 상품명: {product_name}" if product_name else "", "", "", "", "", ""])
     # 행6: 총계 (+ 재고 정보 — 입력된 경우만)
     remaining = None
+    _summary_line = f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개"
+    if is_multi_product:
+        _prod_breakdown = " / ".join(
+            f"{_short_product_label(pk)}: {prod_product_totals[pk]:,}개"
+            for pk in unique_products
+        )
+        _summary_line += f"\n({_prod_breakdown})"
     if inventory is not None:
         remaining = max(0, inventory - total_products)
         values.append([
-            f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개",
+            _summary_line,
             "", "", "", "",
             f"📦 초기재고: {inventory:,}개  |  남은재고: {remaining:,}개",
             "",
         ])
     else:
-        values.append([f"총 주문수: {total_orders:,}건  |  총 제품수: {total_products:,}개", "", "", "", "", ""])
+        values.append([_summary_line, "", "", "", "", ""])
     # 행4: 주의사항
     values.append([DISCLAIMER, "", "", "", "", ""])
     # 행5: 빈 줄
@@ -755,9 +818,16 @@ def write_to_sheet(
 
     # 그래프용 보조 데이터 (차트 아래)
     CHART_DATA_START = len(values)
-    values.append(["날짜 (그래프용)", "주문수", "제품수"])
-    for d in daily_totals:
-        values.append([_fmt_date(d["date"]), d["orders"], d["products"]])
+    if is_multi_product:
+        _prod_labels = [_short_product_label(pk) for pk in unique_products]
+        values.append(["날짜 (그래프용)", "주문수", "제품수"] + _prod_labels)
+        for d in daily_totals:
+            _pc = [date_prod_products[d["date"]].get(pk, 0) for pk in unique_products]
+            values.append([_fmt_date(d["date"]), d["orders"], d["products"]] + _pc)
+    else:
+        values.append(["날짜 (그래프용)", "주문수", "제품수"])
+        for d in daily_totals:
+            values.append([_fmt_date(d["date"]), d["orders"], d["products"]])
     CHART_DATA_END = len(values)
 
     # ── 시간대별 섹션 ────────────────────────────────────
@@ -784,16 +854,39 @@ def write_to_sheet(
                 values.append(["", "", "", "", "", "", ""])
 
             # 차트 소스 겸 데이터 테이블 (단일, 중복 없음)
+            # 시간대별 제품별 집계 (멀티제품 전용)
+            _hour_prod_p: dict = defaultdict(lambda: defaultdict(lambda: defaultdict(int)))
+            if is_multi_product:
+                for _r in sales_data:
+                    _pk2 = _extract_product_key(_r.get("option", ""))
+                    if _pk2:
+                        _d2, _h2 = _r["date"], _r.get("hour", 0)
+                        _bx2 = _extract_box_count(_r.get("option", ""), unit_keyword)
+                        _hour_prod_p[_d2][_h2][_pk2] += _r["quantity"] * _bx2
+
             HOURLY_CHART_DATA_START = len(values)
-            values.append(["날짜+시간", "주문수", "제품수"])
-            for date in dates_sorted:
-                d_obj = datetime.strptime(date, "%Y-%m-%d")
-                short_date = f"{d_obj.month}.{d_obj.day}일"
-                for hour in sorted(hourly_orders[date].keys()):
-                    o = hourly_orders[date][hour]
-                    p = hourly_products[date].get(hour, 0)
-                    if o > 0:
-                        values.append([f"{short_date} {hour}시", o, p])
+            if is_multi_product:
+                _prod_labels_h = [_short_product_label(pk) for pk in unique_products]
+                values.append(["날짜+시간", "주문수", "제품수"] + _prod_labels_h)
+                for date in dates_sorted:
+                    d_obj = datetime.strptime(date, "%Y-%m-%d")
+                    short_date = f"{d_obj.month}.{d_obj.day}일"
+                    for hour in sorted(hourly_orders[date].keys()):
+                        o = hourly_orders[date][hour]
+                        p = hourly_products[date].get(hour, 0)
+                        if o > 0:
+                            _pc_h = [_hour_prod_p[date][hour].get(pk, 0) for pk in unique_products]
+                            values.append([f"{short_date} {hour}시", o, p] + _pc_h)
+            else:
+                values.append(["날짜+시간", "주문수", "제품수"])
+                for date in dates_sorted:
+                    d_obj = datetime.strptime(date, "%Y-%m-%d")
+                    short_date = f"{d_obj.month}.{d_obj.day}일"
+                    for hour in sorted(hourly_orders[date].keys()):
+                        o = hourly_orders[date][hour]
+                        p = hourly_products[date].get(hour, 0)
+                        if o > 0:
+                            values.append([f"{short_date} {hour}시", o, p])
             HOURLY_CHART_DATA_END = len(values)
 
         SIMPLE_TITLE_ROW  = None
@@ -857,6 +950,17 @@ def write_to_sheet(
         }},
         "fields": "userEnteredFormat(textFormat)",
     }})
+
+    # 행6(총계) 강조 + 멀티제품 시 줄바꿈
+    if is_multi_product:
+        R.append({"repeatCell": {
+            "range": cell_range(5, 0, 6, 7),
+            "cell": {"userEnteredFormat": {
+                "wrapStrategy": "WRAP",
+                "textFormat": {"bold": True, "fontSize": 10},
+            }},
+            "fields": "userEnteredFormat(wrapStrategy,textFormat)",
+        }})
 
     # 주의사항 행 (행7)
     R.append({"repeatCell": {
