@@ -14,6 +14,18 @@ from google.oauth2.service_account import Credentials
 
 from pathlib import Path
 
+# ── 성분명 기반 매칭용 상수 ──────────────────────────────────────────
+# 브랜드명: 핵심 성분명 추출 시 제거
+_BRAND_WORDS = frozenset({
+    '뉴트원', 'nutone', 'jdhealth', 'jd헬스', '제이디헬스', 'nutpet', '뉴트펫',
+})
+# 노이즈 단어: 마케팅·수식어 — 핵심 성분명과 무관
+_NOISE_WORDS = frozenset({
+    '부스터', '프리미엄', '고함량', '강화', '스페셜', '플러스', '고급',
+    '단독', '특가', '할인', '기획', '이벤트', '한정', '세일',
+    '신제품', '리뉴얼', '초특가', '최저가', '공구',
+})
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -175,30 +187,78 @@ def read_profit_params(spreadsheet_url: str) -> list:
         return []
 
 
+def _core_ingredient(name: str) -> str:
+    """제품명에서 브랜드명·포장단위·마케팅 단어를 제거하고 핵심 성분명만 반환.
+
+    예) '뉴트원초임계알티지오메가3부스터'           → '초임계알티지오메가3'
+        '[단5일]뉴트원 초임계알티지 오메가3 30캡슐' → '초임계알티지오메가3'
+        '뉴트원 코큐엔자임Q10 코큐텐 30캡슐'        → '코큐엔자임q10코큐텐'
+    """
+    s = re.sub(r'\[.*?\]', '', str(name)).lower()   # 브래킷 제거
+    # 공백·특수문자 기준 단어 분리
+    words = re.split(r'[\s,./·×()\[\]（）]+', s)
+    filtered = []
+    for w in words:
+        w = re.sub(r'[×X\[\]()（）]', '', w).strip()
+        if not w or len(w) < 2:
+            continue
+        if w in _BRAND_WORDS or w in _NOISE_WORDS:
+            continue
+        # 숫자+단위 패턴 제거 (예: 30캡슐, 60정, 500mg, 3box)
+        if re.fullmatch(
+            r'\d+\s*(?:캡슐|정|포|박스|box|bx|세트|set|팩|pack|ml|mg|g|kg|ea|개입|구)',
+            w, re.IGNORECASE,
+        ):
+            continue
+        if re.fullmatch(r'\d+', w):   # 단순 숫자
+            continue
+        filtered.append(w)
+
+    # 합쳐서 특수문자 제거
+    joined = re.sub(r'[^\w가-힣a-z0-9]', '', ''.join(filtered))
+    # 공백 없는 복합어에서도 브랜드·노이즈 단어 제거
+    # (예: '뉴트원초임계알티지오메가3부스터' → 분리 없이 통째로 들어온 경우 처리)
+    for word in sorted(_BRAND_WORDS | _NOISE_WORDS, key=len, reverse=True):
+        joined = joined.replace(word, '')
+    return joined
+
+
 def _match_profit(product_name: str, profit_params: list) -> dict:
     """이익계산참고사항 제품명 퍼지 매칭.
-    1단계: 특수문자·공백 제거 후 포함 매칭
-    2단계: 브래킷 제거 + 키워드 분해 매칭
-           - 단어 경계 기준 매칭 (공백 제거 artifact 방지)
-           - 매칭 수(count) 우선, 동점 시 비율(ratio)로 결정
+
+    1단계  : 특수문자·공백 제거 후 포함 매칭 (완전 일치)
+    1.5단계: 핵심 성분명 기반 매칭 — 브랜드·포장·마케팅 단어 제거 후 포함 비교
+             → 공백 없는 복합어('뉴트원초임계알티지오메가3부스터')나
+                '30캡슐' vs '부스터' 같은 포장 차이를 무시하고 성분으로만 매칭
+    2단계  : 키워드 분해 매칭 — 매칭 수(count) 우선, 동점 시 비율(ratio) 결정
     """
     if not product_name or not profit_params:
         return {}
     norm = lambda s: re.sub(r'[\s\[\]()（）,./·×X]', '', str(s)).lower()
     name_n = norm(product_name)
 
-    # 1단계: 정규화 후 포함 매칭
+    # ── 1단계: 정규화 후 완전 포함 매칭 ──────────────────────────────
     for row in profit_params:
         short = norm(row.get("name", ""))
         if short and len(short) >= 4 and short in name_n:
             return row
 
-    # 2단계: 키워드 분해 매칭
+    # ── 1.5단계: 핵심 성분명 기반 매칭 ──────────────────────────────
+    # 브랜드명·포장단위·마케팅 단어 제거 후 성분명만 비교
+    core_name = _core_ingredient(product_name)
+    if len(core_name) >= 3:
+        for row in profit_params:
+            core_pp = _core_ingredient(row.get("name", ""))
+            if core_pp and len(core_pp) >= 3:
+                # 어느 쪽이든 상대방에 포함되면 매칭
+                if core_pp in core_name or core_name in core_pp:
+                    return row
+
+    # ── 2단계: 키워드 분해 매칭 ──────────────────────────────────────
     clean_raw = re.sub(r'\[.*?\]', '', product_name)
     clean_n   = norm(clean_raw)
 
-    # 단어 경계 매칭용: 공백 보존 버전 (교차 연결 artifact 방지)
-    # 예) "오메가3 30캡슐" → 공백 제거 시 "오메가330캡슐"에서 "30캡슐"이 오매칭될 수 있음
+    # 단어 경계 매칭용 공백 보존 버전 (숫자 교차 연결 artifact 방지)
     norm_wb  = lambda s: re.sub(r'[\[\]()（）,./·×X]', '', str(s)).lower()
     clean_wb = re.sub(r'\s+', ' ', norm_wb(clean_raw)).strip()
     name_wb  = re.sub(r'\s+', ' ', norm_wb(product_name)).strip()
@@ -207,17 +267,14 @@ def _match_profit(product_name: str, profit_params: list) -> dict:
         if not kw:
             return False
         kw_n = norm(kw)
-        # 단어 경계 매칭 (공백 기준): "30캡슐"이 "오메가330캡슐"에 오매칭되는 것 방지
+        # 단어 경계 매칭 (공백 기준)
         wb_ok = ((' ' + kw + ' ') in (' ' + clean_wb + ' ')
                  or (' ' + kw + ' ') in (' ' + name_wb + ' ')
                  or clean_wb.startswith(kw + ' ') or clean_wb.endswith(' ' + kw)
                  or name_wb.startswith(kw + ' ')  or name_wb.endswith(' ' + kw))
-        # 공백 제거 버전도 확인 (복합어 보조 — 단어 경계 매칭이 실패한 경우만)
+        # 공백 제거 버전 (복합어 보조) — 숫자 시작 키워드는 교차 오매칭 가능성 제외
         rm_ok = kw_n in clean_n or kw_n in name_n
-        return wb_ok or (rm_ok and not any(
-            # 공백 제거로 인해 숫자가 합쳐지는 패턴이면 rm_ok만으로는 인정 안 함
-            c.isdigit() for c in (kw_n[:1] if kw_n else '')
-        ))
+        return wb_ok or (rm_ok and not (kw_n[:1].isdigit() if kw_n else False))
 
     best_matches = 0
     best_score   = 0.0
@@ -229,12 +286,10 @@ def _match_profit(product_name: str, profit_params: list) -> dict:
         if not keywords:
             continue
         matches = sum(1 for kw in keywords if _kw_match(kw))
-        # 최소 2개 키워드 일치
         if matches < 2:
             continue
         score = matches / len(keywords)
-        # 매칭 수(count) 우선, 동점 시 비율(score)로 결정
-        # → 키워드 많은 긴 이름이 비율 때문에 불이익 받는 것 방지
+        # 매칭 수 우선, 동점 시 비율로 결정
         if (matches, score) > (best_matches, best_score):
             best_matches = matches
             best_score   = score
