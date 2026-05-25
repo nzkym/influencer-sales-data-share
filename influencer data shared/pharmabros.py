@@ -221,10 +221,11 @@ def upload_to_drive(
     folder_id: str,
     file_bytes: bytes,
     file_name: str,
+    title: str = "",
 ) -> str:
     """
     사장님 구글 드라이브 폴더에 엑셀 파일 업로드.
-    같은 이름 파일은 자동 덮어쓰기.
+    같은 캠페인(title_ 로 시작하는 파일)은 업로드 전에 모두 삭제.
     """
     service = _drive_service_oauth(client_id, client_secret, refresh_token)
     media   = MediaIoBaseUpload(
@@ -232,54 +233,46 @@ def upload_to_drive(
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    # 같은 이름 파일 검색
-    existing = service.files().list(
-        q=f"name='{file_name}' and '{folder_id}' in parents and trashed=false",
-        fields="files(id)",
-    ).execute().get("files", [])
-
-    if existing:
-        file_id = existing[0]["id"]
-        service.files().update(fileId=file_id, media_body=media).execute()
-        print(f"  [Drive] 덮어쓰기: {file_name}")
-    else:
-        uploaded = service.files().create(
-            body={"name": file_name, "parents": [folder_id]},
-            media_body=media,
-            fields="id",
-        ).execute()
-        file_id = uploaded["id"]
-        print(f"  [Drive] 업로드 완료: {file_name}")
-
-    # 최종 업로드 시 정기 파일(_판매현황.xlsx) 자동 삭제
-    if file_name.endswith("_판매현황_최종.xlsx"):
-        interim_name = file_name.replace("_판매현황_최종.xlsx", "_판매현황.xlsx")
-        old_files = service.files().list(
-            q=f"name='{interim_name}' and '{folder_id}' in parents and trashed=false",
+    # 같은 캠페인 기존 파일 전부 삭제 (title_ 로 시작하는 파일 모두)
+    if title:
+        safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+        all_in_folder = service.files().list(
+            q=f"'{folder_id}' in parents and trashed=false",
             fields="files(id,name)",
         ).execute().get("files", [])
-        for f in old_files:
-            service.files().delete(fileId=f["id"]).execute()
-            print(f"  [Drive] 정기 파일 삭제: {f['name']}")
+        for f in all_in_folder:
+            if f["name"].startswith(safe_prefix):
+                service.files().delete(fileId=f["id"]).execute()
+                print(f"  [Drive] 기존 파일 삭제: {f['name']}")
+
+    # 새 파일 업로드
+    uploaded = service.files().create(
+        body={"name": file_name, "parents": [folder_id]},
+        media_body=media,
+        fields="id",
+    ).execute()
+    file_id = uploaded["id"]
+    print(f"  [Drive] 업로드 완료: {file_name}")
 
     return f"https://drive.google.com/file/d/{file_id}/view"
 
 
 # ── 파일명 생성 ───────────────────────────────────────────
-def make_filenames(title: str, is_final: bool, date_from: str, date_to: str) -> list[str]:
+def make_filenames(title: str, is_final: bool, date_from: str = "", date_to: str = "") -> list[str]:
     """
-    업로드할 파일명 목록 반환 (항상 1개).
-    날짜범위는 파일명 대신 엑셀 내부에 표기.
+    업로드할 파일명 반환 (항상 1개).
 
-    정기 업로드: 할링희_20260520_1400.xlsx   (업로드 날짜+시각)
-    최종 업로드: 할링희_최종_20260521_1000.xlsx
+    정기 업로드: 힐링희_5월20일_14시_업로드건.xlsx
+    최종 업로드: 힐링희_5월25일_10시_최종_업로드건.xlsx
     """
+    now  = now_kst()
     safe = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+    ts   = f"{now.month}월{now.day}일_{now.hour}시"
 
     if is_final:
-        return [f"{safe}_판매현황_최종.xlsx"]
+        return [f"{safe}_{ts}_최종_업로드건.xlsx"]
     else:
-        return [f"{safe}_판매현황.xlsx"]
+        return [f"{safe}_{ts}_업로드건.xlsx"]
 
 
 # ── 메인 실행 함수 ────────────────────────────────────────
@@ -334,7 +327,7 @@ def run_pharmabros(
     # 파일명: 제목_시작일~종료일_시각.xlsx
     file_name = make_filenames(title, is_final, date_from, query_to)[0]
 
-    # 구글 드라이브 업로드 (사장님 계정)
+    # 구글 드라이브 업로드 (사장님 계정) — 기존 파일 삭제 후 신규 업로드
     file_url = upload_to_drive(
         client_id=oauth_client_id,
         client_secret=oauth_client_secret,
@@ -342,6 +335,7 @@ def run_pharmabros(
         folder_id=drive_folder_id,
         file_bytes=excel_bytes,
         file_name=file_name,
+        title=title,
     )
 
     folder_url = f"https://drive.google.com/drive/folders/{drive_folder_id}"
