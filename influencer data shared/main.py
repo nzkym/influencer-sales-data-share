@@ -864,10 +864,34 @@ def _run_pharmabros_if_needed(force: bool = False):
             )
         except Exception as e:
             print(f"  [파마브로스 오류] {e}")
+            err_str = str(e)
+            if "invalid_grant" in err_str:
+                cause  = "구글 인증 토큰 만료 또는 취소됨"
+                action = (
+                    "조치 방법:\n"
+                    "1. 사장님 PC에서 python get_drive_token.py 실행\n"
+                    "2. 새 OAUTH_REFRESH_TOKEN 복사\n"
+                    "3. SSH 서버에서 아래 명령어 실행:\n"
+                    "sed -i \"s|OAUTH_REFRESH_TOKEN=.*|OAUTH_REFRESH_TOKEN=새토큰값|\" "
+                    "~/influencer-sales-data-share/'influencer data shared'/.env"
+                )
+            elif "503" in err_str or "Transient" in err_str or "transient" in err_str:
+                cause  = "구글 서버 일시적 오류 (503) — 자동 재시도 예정"
+                action = "별도 조치 불필요. 5~10분 후 자동으로 재시도됩니다."
+            elif "403" in err_str or "Forbidden" in err_str:
+                cause  = "구글 드라이브 접근 권한 오류"
+                action = "드라이브 폴더 공유 설정 또는 OAuth 앱 권한을 확인해주세요."
+            elif "quota" in err_str.lower() or "429" in err_str:
+                cause  = "구글 API 할당량 초과"
+                action = "잠시 후 자동 재시도됩니다. 반복 시 문의해주세요."
+            else:
+                cause  = f"알 수 없는 오류: {err_str[:120]}"
+                action = "개발자에게 문의해주세요."
             send_telegram(
                 f"⚠️ [파마브로스 파일공유 오류]\n\n"
                 f"📦 캠페인: {title[:40]}\n"
-                f"❌ 오류: {str(e)[:200]}\n"
+                f"❌ 원인: {cause}\n\n"
+                f"🔧 {action}\n\n"
                 f"🕐 {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
 
