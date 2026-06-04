@@ -80,16 +80,16 @@ def should_run(start_date_str: str, end_date_str: str) -> tuple[bool, bool]:
 
     minute = now.minute
 
-    # 종료일 다음날 10시: 최종 업로드 (10:00~10:09만 실행)
-    if today == end + timedelta(days=1) and hour == 10 and minute < 10:
+    # 종료일 다음날 10시: 최종 업로드 (10:00~10:14만 실행, 3회 시도)
+    if today == end + timedelta(days=1) and hour == 10 and minute < 15:
         return True, True
 
-    # 시작일 14시 또는 16시 (첫 10분만 실행)
-    if today == start and hour in (14, 16) and minute < 10:
+    # 시작일 14시 또는 16시 (첫 15분만 실행, 3회 시도)
+    if today == start and hour in (14, 16) and minute < 15:
         return True, False
 
-    # D+1 이후 종료일까지 매일 10시 (10:00~10:09만 실행)
-    if start < today <= end and hour == 10 and minute < 10:
+    # D+1 이후 종료일까지 매일 10시 (10:00~10:14만 실행, 3회 시도)
+    if start < today <= end and hour == 10 and minute < 15:
         return True, False
 
     return False, False
