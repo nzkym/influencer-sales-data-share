@@ -1,145 +1,146 @@
 """
-리뷰 API 엔드포인트 탐색 스크립트 (v2)
+리뷰 API 테스트 스크립트 — sell.smartstore.naver.com
 서버에서 실행: python3 debug_review_api.py
 
-v1 결과: /v1·v2/contents/reviews 모두 404 → 경로 자체가 다름
-→ 더 넓은 범위로 경로 탐색
+목적:
+  1. 쿠키 인증이 정상 동작하는지 확인
+  2. 리뷰 텍스트 필드명 확인 (reviewBody / content / 기타)
+  3. 날짜 필드 확인 (createDate 등)
 """
 
-import os, json, bcrypt, base64, time, requests
+import os, json, requests
+from datetime import datetime, timezone, timedelta
 from dotenv import load_dotenv
 from pathlib import Path
 
 load_dotenv(Path(__file__).parent / ".env")
 
-BASE_URL = "https://api.commerce.naver.com"
+SELL_REVIEW_URL = "https://sell.smartstore.naver.com/api/v3/contents/reviews/search"
+KST = timezone(timedelta(hours=9))
 
-TEST_STORE   = "jdhealth"
-TEST_PRODUCT = "339102001"   # 구글시트 URL 기반 번호
-TEST_CHANNEL = "4877974075"  # 스마트스토어 UI에서 확인된 채널상품번호
-
-STORE_CREDS = {
-    "nutone":   (os.getenv("NUTONE_CLIENT_ID"),   os.getenv("NUTONE_CLIENT_SECRET")),
-    "jdhealth": (os.getenv("JDHEALTH_CLIENT_ID"), os.getenv("JDHEALTH_CLIENT_SECRET")),
-    "nutpet":   (os.getenv("NUTPET_CLIENT_ID"),   os.getenv("NUTPET_CLIENT_SECRET")),
-}
-
-
-def get_token(client_id, client_secret):
-    ts = str(int(time.time() * 1000))
-    pw = f"{client_id}_{ts}"
-    hashed = bcrypt.hashpw(pw.encode(), client_secret.encode())
-    sign = base64.standard_b64encode(hashed).decode()
-    r = requests.post(f"{BASE_URL}/external/v1/oauth2/token", data={
-        "client_id": client_id, "timestamp": ts,
-        "client_secret_sign": sign,
-        "grant_type": "client_credentials", "type": "SELF",
-    }, timeout=30)
-    r.raise_for_status()
-    return r.json()["access_token"]
-
-
-def probe(headers, url, params, label):
-    r = requests.get(url, headers=headers, params=params, timeout=15)
-    status = r.status_code
-    try:
-        data = r.json()
-        code = data.get("code", "") if isinstance(data, dict) else ""
-        contents = data.get("contents", data.get("data", [])) if isinstance(data, dict) else []
-        cnt = len(contents) if isinstance(contents, list) else "?"
-        keys = list(data.keys()) if isinstance(data, dict) else []
-        result = f"[{status}] {code or '성공'} | contents={cnt} | keys={keys}"
-        if status == 200 and contents:
-            first = contents[0] if isinstance(contents, list) else contents
-            result += f"\n        첫 항목 키: {list(first.keys()) if isinstance(first, dict) else first}"
-    except Exception:
-        result = f"[{status}] {r.text[:120]}"
-    print(f"  {'✅' if status==200 else '❌'} {label}")
-    print(f"     {result}")
+# 테스트할 스토어 (쿠키가 설정된 스토어)
+TEST_STORE = "jdhealth"
+COOKIES = os.getenv(f"{TEST_STORE.upper()}_COOKIES", "")
 
 
 def main():
-    cid, csecret = STORE_CREDS[TEST_STORE]
-    if not cid:
-        print(f"[오류] {TEST_STORE} API 키가 .env에 없습니다.")
+    if not COOKIES:
+        print(f"[오류] .env에 {TEST_STORE.upper()}_COOKIES가 없습니다.")
+        print("  .env.example을 참고해서 쿠키를 설정해주세요.")
         return
 
-    print("토큰 발급 중...")
-    token = get_token(cid, csecret)
-    headers = {"Authorization": f"Bearer {token}"}
-    print("토큰 발급 완료\n")
+    now = datetime.now(KST)
+    # 최근 7일 조회
+    to_date   = now.strftime("%Y-%m-%dT23:59:59.999+09:00")
+    from_date = (now - timedelta(days=7)).strftime("%Y-%m-%dT00:00:00.000+09:00")
 
-    pno  = TEST_PRODUCT   # 339102001
-    cpno = TEST_CHANNEL   # 4877974075
+    print(f"API 테스트: {TEST_STORE}")
+    print(f"기간: {from_date[:10]} ~ {to_date[:10]}\n")
 
-    print("=" * 55)
-    print(f"원상품번호: {pno}  /  채널상품번호: {cpno}")
-    print("=" * 55)
+    headers = {
+        "Accept": "application/json, text/plain, */*",
+        "Content-Type": "application/json;charset=UTF-8",
+        "Cookie": COOKIES,
+        "Origin": "https://sell.smartstore.naver.com",
+        "Referer": "https://sell.smartstore.naver.com/",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    }
+    payload = {
+        "reviewSearchSortType": "REVIEW_CREATE_DATE_DESC",
+        "searchKeywordType": "IDS",
+        "searchKeyword": "",
+        "fromDate": from_date,
+        "toDate": to_date,
+        "useSelectedDate": False,
+        "reviewTypes": [],
+        "reviewContentClassTypes": [],
+        "storeTypes": [],
+        "reviewScores": [],
+        "benefitKindTypeStringList": [],
+        "contentsStatusTypes": [],
+        "page": 0,
+        "size": 5,  # 테스트용: 5개만
+        "sort": [],
+    }
 
-    # ── 그룹 A: contents 계열 ─────────────────────────────
-    print("\n[A] contents 계열 경로")
-    for ver in ["v1", "v2"]:
-        for path in [
-            "contents/reviews",
-            "contents/product-reviews",
-            "contents/channel-product-reviews",
-            "contents/seller-reviews",
-        ]:
-            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
-                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
+    r = requests.post(SELL_REVIEW_URL, json=payload, headers=headers, timeout=30)
+    print(f"HTTP 상태: {r.status_code}")
 
-    # ── 그룹 B: seller 계열 ──────────────────────────────
-    print("\n[B] seller 계열 경로")
-    for ver in ["v1", "v2"]:
-        for path in [
-            "seller/reviews",
-            "seller/product-reviews",
-        ]:
-            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
-                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
+    if r.status_code == 401:
+        print("[실패] 쿠키가 만료되었거나 잘못되었습니다. 쿠키를 다시 복사해주세요.")
+        return
+    if r.status_code == 403:
+        print("[실패] 접근 권한 없음. 로그인 쿠키를 확인해주세요.")
+        return
+    if not r.ok:
+        print(f"[실패] {r.text[:300]}")
+        return
 
-    # ── 그룹 C: products 계열 (상품번호 포함) ────────────
-    print("\n[C] products 계열 — 원상품번호로")
-    for ver in ["v1", "v2"]:
-        for path in [
-            f"products/{pno}/reviews",
-            f"channel-products/{pno}/reviews",
-        ]:
-            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
-                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
+    data = r.json()
+    total = data.get("totalElements", 0)
+    total_pages = data.get("totalPages", 0)
+    contents = data.get("contents", [])
 
-    # ── 그룹 D: products 계열 (채널상품번호) ─────────────
-    print("\n[D] products 계열 — 채널상품번호로")
-    for ver in ["v1", "v2"]:
-        for path in [
-            f"products/{cpno}/reviews",
-            f"channel-products/{cpno}/reviews",
-        ]:
-            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
-                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
+    print(f"\n✅ 성공!")
+    print(f"전체 리뷰 수: {total}건")
+    print(f"전체 페이지 수: {total_pages}페이지 (size=500 기준 약 {(total + 499) // 500}페이지)")
+    print(f"이번 응답: {len(contents)}건\n")
 
-    # ── 그룹 E: 채널상품번호로 파라미터 방식 ─────────────
-    print("\n[E] 파라미터 방식 — 채널상품번호 사용")
-    for ver in ["v1", "v2"]:
-        for path in ["contents/reviews", "reviews"]:
-            for param_name in ["channelProductId", "productId", "originProductNo"]:
-                probe(headers, f"{BASE_URL}/external/{ver}/{path}",
-                      {param_name: cpno, "page": 1, "pageSize": 3},
-                      f"{ver}/{path} [{param_name}={cpno}]")
+    if not contents:
+        print("[경고] 해당 기간에 리뷰가 없습니다.")
+        return
 
-    # ── 그룹 F: 아예 다른 경로 ───────────────────────────
-    print("\n[F] 기타 경로")
-    for ver in ["v1", "v2"]:
-        for path in [
-            "reviews",
-            "product-reviews",
-            "shopping/reviews",
-        ]:
-            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
-                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
+    # 첫 번째 리뷰의 모든 필드 출력 (텍스트 필드명 확인용)
+    first = contents[0]
+    print("=" * 50)
+    print("첫 번째 리뷰 전체 필드:")
+    print("=" * 50)
+    for key, value in first.items():
+        if key == "attachs":
+            print(f"  attachs: [{len(value)}개 첨부]")
+        elif isinstance(value, str) and len(value) > 80:
+            print(f"  {key}: {value[:80]}...")
+        else:
+            print(f"  {key}: {value}")
 
-    print("\n" + "=" * 55)
-    print("탐색 완료. ✅ 표시된 항목을 캡처해서 공유해주세요.")
+    # 리뷰 텍스트 필드 후보 확인
+    print("\n" + "=" * 50)
+    print("리뷰 텍스트 필드 후보 확인:")
+    text_candidates = ["reviewBody", "content", "reviewContent", "textContent",
+                       "body", "reviewText", "text", "message", "reviewMessage"]
+    found_text = None
+    for field in text_candidates:
+        val = first.get(field)
+        if val:
+            print(f"  ✅ {field}: {str(val)[:100]}")
+            found_text = field
+        else:
+            print(f"  ❌ {field}: 없음")
+
+    print("\n날짜 필드 후보 확인:")
+    date_candidates = ["createDate", "writeDate", "createdAt", "registeredDate",
+                       "reviewCreateDate", "modifyDate"]
+    for field in date_candidates:
+        val = first.get(field)
+        if val:
+            print(f"  ✅ {field}: {val}")
+        else:
+            print(f"  ❌ {field}: 없음")
+
+    # 제품별 분포 (5건 기준)
+    print(f"\n수집된 {len(contents)}건의 제품명:")
+    for item in contents:
+        name = item.get("productName", "?")
+        score = item.get("reviewScore", "?")
+        date_field = item.get("createDate") or item.get("writeDate") or "?"
+        date_short = str(date_field)[:10] if date_field != "?" else "?"
+        print(f"  [{score}점] {date_short} | {name[:40]}")
+
+    if found_text:
+        print(f"\n리뷰 텍스트 필드명: '{found_text}' ← naver_review_api.py에 반영됨")
+    else:
+        print("\n[주의] 리뷰 텍스트 필드를 찾지 못했습니다.")
+        print("  위의 '첫 번째 리뷰 전체 필드' 목록을 확인해서 텍스트가 있는 필드명을 알려주세요.")
 
 
 if __name__ == "__main__":
