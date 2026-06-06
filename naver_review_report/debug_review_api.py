@@ -1,8 +1,9 @@
 """
-리뷰 API 진단 스크립트
+리뷰 API 엔드포인트 탐색 스크립트 (v2)
 서버에서 실행: python3 debug_review_api.py
 
-실제 API 응답 구조를 출력해서 올바른 파라미터명과 필드명을 확인합니다.
+v1 결과: /v1·v2/contents/reviews 모두 404 → 경로 자체가 다름
+→ 더 넓은 범위로 경로 탐색
 """
 
 import os, json, bcrypt, base64, time, requests
@@ -13,10 +14,9 @@ load_dotenv(Path(__file__).parent / ".env")
 
 BASE_URL = "https://api.commerce.naver.com"
 
-# 진단할 스토어 + 상품번호 (sheets_reader 없이 직접 지정)
-# 스크린샷에서 보인 첫 번째 상품번호로 테스트
 TEST_STORE   = "jdhealth"
-TEST_PRODUCT = "339102001"   # 뉴트키즈타민 상품번호
+TEST_PRODUCT = "339102001"   # 구글시트 URL 기반 번호
+TEST_CHANNEL = "4877974075"  # 스마트스토어 UI에서 확인된 채널상품번호
 
 STORE_CREDS = {
     "nutone":   (os.getenv("NUTONE_CLIENT_ID"),   os.getenv("NUTONE_CLIENT_SECRET")),
@@ -40,31 +40,22 @@ def get_token(client_id, client_secret):
 
 
 def probe(headers, url, params, label):
-    print(f"\n{'─'*50}")
-    print(f"테스트: {label}")
-    print(f"URL   : {url}")
-    print(f"Params: {json.dumps(params, ensure_ascii=False)}")
-    r = requests.get(url, headers=headers, params=params, timeout=30)
-    print(f"Status: {r.status_code}")
+    r = requests.get(url, headers=headers, params=params, timeout=15)
+    status = r.status_code
     try:
         data = r.json()
-        # 최상위 키 출력
-        print(f"응답 최상위 키: {list(data.keys()) if isinstance(data, dict) else type(data)}")
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if k != "contents":
-                    print(f"  {k}: {v}")
-            contents = data.get("contents", [])
-            print(f"  contents 개수: {len(contents)}")
-            if contents:
-                print(f"  첫 번째 리뷰 키: {list(contents[0].keys())}")
-                print(f"  첫 번째 리뷰 샘플:")
-                for fk, fv in contents[0].items():
-                    val = str(fv)[:80]
-                    print(f"    {fk}: {val}")
-    except Exception as e:
-        print(f"JSON 파싱 실패: {e}")
-        print(f"응답 본문: {r.text[:500]}")
+        code = data.get("code", "") if isinstance(data, dict) else ""
+        contents = data.get("contents", data.get("data", [])) if isinstance(data, dict) else []
+        cnt = len(contents) if isinstance(contents, list) else "?"
+        keys = list(data.keys()) if isinstance(data, dict) else []
+        result = f"[{status}] {code or '성공'} | contents={cnt} | keys={keys}"
+        if status == 200 and contents:
+            first = contents[0] if isinstance(contents, list) else contents
+            result += f"\n        첫 항목 키: {list(first.keys()) if isinstance(first, dict) else first}"
+    except Exception:
+        result = f"[{status}] {r.text[:120]}"
+    print(f"  {'✅' if status==200 else '❌'} {label}")
+    print(f"     {result}")
 
 
 def main():
@@ -73,49 +64,82 @@ def main():
         print(f"[오류] {TEST_STORE} API 키가 .env에 없습니다.")
         return
 
-    print(f"토큰 발급 중 ({TEST_STORE})...")
+    print("토큰 발급 중...")
     token = get_token(cid, csecret)
     headers = {"Authorization": f"Bearer {token}"}
-    print("토큰 발급 완료")
+    print("토큰 발급 완료\n")
 
-    # ── 테스트 1: 필터 없이 v2 전체 조회 (어떤 데이터가 오는지 확인) ──
-    probe(headers,
-          f"{BASE_URL}/external/v2/contents/reviews",
-          {"page": 1, "pageSize": 3},
-          "v2 / 필터 없음")
+    pno  = TEST_PRODUCT   # 339102001
+    cpno = TEST_CHANNEL   # 4877974075
 
-    # ── 테스트 2: v1 필터 없이 ─────────────────────────────────────────
-    probe(headers,
-          f"{BASE_URL}/external/v1/contents/reviews",
-          {"page": 1, "pageSize": 3},
-          "v1 / 필터 없음")
+    print("=" * 55)
+    print(f"원상품번호: {pno}  /  채널상품번호: {cpno}")
+    print("=" * 55)
 
-    # ── 테스트 3: productId 파라미터 ──────────────────────────────────
-    probe(headers,
-          f"{BASE_URL}/external/v2/contents/reviews",
-          {"productId": TEST_PRODUCT, "page": 1, "pageSize": 3},
-          f"v2 / productId={TEST_PRODUCT}")
+    # ── 그룹 A: contents 계열 ─────────────────────────────
+    print("\n[A] contents 계열 경로")
+    for ver in ["v1", "v2"]:
+        for path in [
+            "contents/reviews",
+            "contents/product-reviews",
+            "contents/channel-product-reviews",
+            "contents/seller-reviews",
+        ]:
+            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
+                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
 
-    # ── 테스트 4: channelProductId 파라미터 ───────────────────────────
-    probe(headers,
-          f"{BASE_URL}/external/v2/contents/reviews",
-          {"channelProductId": TEST_PRODUCT, "page": 1, "pageSize": 3},
-          f"v2 / channelProductId={TEST_PRODUCT}")
+    # ── 그룹 B: seller 계열 ──────────────────────────────
+    print("\n[B] seller 계열 경로")
+    for ver in ["v1", "v2"]:
+        for path in [
+            "seller/reviews",
+            "seller/product-reviews",
+        ]:
+            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
+                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
 
-    # ── 테스트 5: originProductNo 파라미터 ────────────────────────────
-    probe(headers,
-          f"{BASE_URL}/external/v2/contents/reviews",
-          {"originProductNo": TEST_PRODUCT, "page": 1, "pageSize": 3},
-          f"v2 / originProductNo={TEST_PRODUCT}")
+    # ── 그룹 C: products 계열 (상품번호 포함) ────────────
+    print("\n[C] products 계열 — 원상품번호로")
+    for ver in ["v1", "v2"]:
+        for path in [
+            f"products/{pno}/reviews",
+            f"channel-products/{pno}/reviews",
+        ]:
+            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
+                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
 
-    # ── 테스트 6: v2 다른 엔드포인트 시도 ────────────────────────────
-    probe(headers,
-          f"{BASE_URL}/external/v2/contents/channel-product-reviews",
-          {"channelProductId": TEST_PRODUCT, "page": 1, "pageSize": 3},
-          f"v2 / channel-product-reviews / channelProductId")
+    # ── 그룹 D: products 계열 (채널상품번호) ─────────────
+    print("\n[D] products 계열 — 채널상품번호로")
+    for ver in ["v1", "v2"]:
+        for path in [
+            f"products/{cpno}/reviews",
+            f"channel-products/{cpno}/reviews",
+        ]:
+            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
+                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
 
-    print(f"\n{'='*50}")
-    print("진단 완료. 위 결과를 복사해서 공유해주세요.")
+    # ── 그룹 E: 채널상품번호로 파라미터 방식 ─────────────
+    print("\n[E] 파라미터 방식 — 채널상품번호 사용")
+    for ver in ["v1", "v2"]:
+        for path in ["contents/reviews", "reviews"]:
+            for param_name in ["channelProductId", "productId", "originProductNo"]:
+                probe(headers, f"{BASE_URL}/external/{ver}/{path}",
+                      {param_name: cpno, "page": 1, "pageSize": 3},
+                      f"{ver}/{path} [{param_name}={cpno}]")
+
+    # ── 그룹 F: 아예 다른 경로 ───────────────────────────
+    print("\n[F] 기타 경로")
+    for ver in ["v1", "v2"]:
+        for path in [
+            "reviews",
+            "product-reviews",
+            "shopping/reviews",
+        ]:
+            probe(headers, f"{BASE_URL}/external/{ver}/{path}",
+                  {"page": 1, "pageSize": 3}, f"{ver}/{path}")
+
+    print("\n" + "=" * 55)
+    print("탐색 완료. ✅ 표시된 항목을 캡처해서 공유해주세요.")
 
 
 if __name__ == "__main__":
