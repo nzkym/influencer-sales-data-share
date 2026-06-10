@@ -65,6 +65,7 @@ def aggregate(rows: list[list[str]]):
     idx = {name: i for i, name in enumerate(header)}
 
     qty_by_key: dict[tuple[str, str], int] = defaultdict(int)
+    amount_by_key: dict[tuple[str, str], int] = defaultdict(int)
     amount_by_month: dict[str, int] = defaultdict(int)
 
     for row in data:
@@ -77,40 +78,78 @@ def aggregate(rows: list[list[str]]):
         year_month = date_str[:7]  # "YYYY-MM"
         sku = row[idx["SKU 명"]].strip()
 
+        amount = to_int(row[idx["총 단가"]])
         qty_by_key[(year_month, sku)] += to_int(row[idx["수량"]])
-        amount_by_month[year_month] += to_int(row[idx["총 단가"]])
+        amount_by_key[(year_month, sku)] += amount
+        amount_by_month[year_month] += amount
 
-    return qty_by_key, amount_by_month
+    return qty_by_key, amount_by_key, amount_by_month
 
 
 NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
 
+# 이 달부터 인센티브(C~E열) 자동계산 시작. 그 이전 달은 기존 입력값을 그대로 보존
+INCENTIVE_START_MONTH = "2026-06"
 
-def write_inbound_sheet(ws, qty_by_key: dict, updated_at: str):
+AMOUNT_HEADERS = [
+    "년월",
+    "입고금액(총단가,단위:원)",
+    "직전3개월평균대비 증감금액",
+    "직전 3개월평균",
+    "인센티브예상금액",
+]
+
+
+def shift_month(year_month: str, delta: int) -> str:
+    year, month = map(int, year_month.split("-"))
+    total = year * 12 + (month - 1) + delta
+    year, month = divmod(total, 12)
+    return f"{year:04d}-{month + 1:02d}"
+
+
+def write_inbound_sheet(ws, qty_by_key: dict, amount_by_key: dict, updated_at: str):
     # 년월 최신순, 동일 년월 내에서는 SKU명 오름차순
     rows = sorted(qty_by_key.items(), key=lambda kv: kv[0][1])
     rows.sort(key=lambda kv: kv[0][0], reverse=True)
 
-    values = [["마지막 업데이트:", updated_at], ["년월", "SKU명", "입고수량"]]
-    values += [[year_month, sku, qty] for (year_month, sku), qty in rows]
+    values = [["마지막 업데이트:", updated_at], ["년월", "SKU명", "입고수량", "입고금액(총단가,단위:원)"]]
+    values += [[year_month, sku, qty, amount_by_key[(year_month, sku)]] for (year_month, sku), qty in rows]
 
     ws.clear()
     ws.update(range_name="A1", values=values, value_input_option="RAW")
     if rows:
-        ws.format(f"C3:C{2 + len(rows)}", NUMBER_FORMAT)
+        ws.format(f"C3:D{2 + len(rows)}", NUMBER_FORMAT)
 
 
 def write_amount_sheet(ws, amount_by_month: dict, updated_at: str):
-    # 년월 최신순
-    rows = sorted(amount_by_month.items(), key=lambda kv: kv[0], reverse=True)
+    # INCENTIVE_START_MONTH 이전 달의 인센티브(C~E열)는 기존 입력값을 그대로 보존
+    existing = ws.get_values("A3:E1000", value_render_option="UNFORMATTED_VALUE")
+    preserved_cde = {
+        row[0]: (row + ["", "", "", "", ""])[2:5]
+        for row in existing
+        if row and row[0] < INCENTIVE_START_MONTH
+    }
 
-    values = [["마지막 업데이트:", updated_at], ["년월", "입고금액(총단가,단위:원)"]]
-    values += [[year_month, amount] for year_month, amount in rows]
+    months_desc = sorted(amount_by_month, reverse=True)
+    latest_month = months_desc[0]
+
+    values = [["마지막 업데이트:", updated_at], AMOUNT_HEADERS]
+    for year_month in months_desc:
+        amount = amount_by_month[year_month]
+        if year_month < INCENTIVE_START_MONTH:
+            change, prev_avg, incentive = preserved_cde.get(year_month, ["", "", ""])
+        elif year_month == latest_month:
+            # 당월(데이터 취합 진행중)은 다음달에 계산
+            change, prev_avg, incentive = "", "", ""
+        else:
+            prev_avg = round(sum(amount_by_month.get(shift_month(year_month, -i), 0) for i in (1, 2, 3)) / 3)
+            change = amount - prev_avg
+            incentive = round(change * 0.01) if change >= 5_000_000 else 0
+        values.append([year_month, amount, change, prev_avg, incentive])
 
     ws.clear()
     ws.update(range_name="A1", values=values, value_input_option="RAW")
-    if rows:
-        ws.format(f"B3:B{2 + len(rows)}", NUMBER_FORMAT)
+    ws.format(f"B3:E{2 + len(months_desc)}", NUMBER_FORMAT)
 
 
 def main():
@@ -120,10 +159,10 @@ def main():
     source_ws = get_worksheet(client, SOURCE_SHEET_ID, SOURCE_GID)
     rows = source_ws.get_all_values()
 
-    qty_by_key, amount_by_month = aggregate(rows)
+    qty_by_key, amount_by_key, amount_by_month = aggregate(rows)
 
     inbound_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_INBOUND)
-    write_inbound_sheet(inbound_ws, qty_by_key, updated_at)
+    write_inbound_sheet(inbound_ws, qty_by_key, amount_by_key, updated_at)
 
     amount_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_AMOUNT)
     write_amount_sheet(amount_ws, amount_by_month, updated_at)
