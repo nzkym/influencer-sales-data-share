@@ -1,0 +1,44 @@
+name: 쿠팡 로켓배송 데이터 업데이트
+
+on:
+  schedule:
+    - cron: '0 23 * * *'  # 매일 08:00 KST (23:00 UTC)
+  workflow_dispatch:        # 수동 실행 버튼
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 코드 체크아웃
+        uses: actions/checkout@v4
+
+      - name: Python 설정
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: '조은혜인센티브관련 쿠팡,올리브영데이터조사/requirements.txt'
+
+      - name: 패키지 설치
+        run: pip install -r "조은혜인센티브관련 쿠팡,올리브영데이터조사/requirements.txt"
+
+      - name: 구글 서비스 계정 키 파일 생성
+        run: |
+          mkdir -p "influencer data shared/credentials"
+          echo '${{ secrets.GOOGLE_CREDENTIALS_JSON }}' > "influencer data shared/credentials/google-credentials.json"
+
+      - name: .env 파일 생성
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          {
+            echo "TELEGRAM_BOT_TOKEN=$TELEGRAM_BOT_TOKEN"
+            echo "TELEGRAM_CHAT_ID=$TELEGRAM_CHAT_ID"
+          } > "조은혜인센티브관련 쿠팡,올리브영데이터조사/.env"
+
+      - name: 데이터 업데이트 실행
+        run: |
+          cd "조은혜인센티브관련 쿠팡,올리브영데이터조사"
+          python main.py
