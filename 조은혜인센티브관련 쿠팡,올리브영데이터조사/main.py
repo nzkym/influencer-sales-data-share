@@ -20,10 +20,16 @@ CREDENTIALS_PATH = str(
 SOURCE_SHEET_ID = "1EekZ89wq_Dk4AY844QwROMUcQN2yL1jY_6Ja1YAO_mU"
 SOURCE_GID = 617188056
 
+# 원본: 올리브영 매출 (연도별 탭. 연도가 바뀌면 시트ID/GID도 함께 갱신 필요)
+OLIVE_SOURCE_SHEET_ID = "14dbKT1mHZcEMkg183tmxv3aP-pBenYctJUStKyOQaOU"
+OLIVE_SOURCE_GID = 295784298  # *26년 매출
+OLIVE_YEAR = 2026
+
 # 가공 결과를 쓸 시트
 TARGET_SHEET_ID = "1ab_Pha20ULYGh__gzzV59BRIoR4x_HSCEY9TiAMYWPw"
-TARGET_GID_INBOUND = 2075262872  # 쿠팡 로켓 입고내역 (월별/SKU별 입고수량)
-TARGET_GID_AMOUNT = 0            # 쿠팡 로켓배송 (월별/SKU별 입고금액)
+TARGET_GID_INBOUND = 2075262872    # 쿠팡 로켓 입고내역 (월별/SKU별 입고수량/입고금액)
+TARGET_GID_INCENTIVE = 0           # 인센티브 계산 (쿠팡+올리브영 월별 인센티브)
+TARGET_GID_OLIVE_SALES = 669309880  # 올리브영 매출 (월별/품명별 매출액)
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
@@ -86,18 +92,95 @@ def aggregate(rows: list[list[str]]):
     return qty_by_key, amount_by_key, amount_by_month
 
 
+# 올리브영 '*26년 매출' 탭: 월별 블록(합계수량/합계매출/일평균수량/일평균매출/일별...)이
+# 가로로 나열되어 있음. 각 블록의 시작 컬럼(0-base) 목록 (1월~12월)
+OLIVE_MONTH_BLOCK_STARTS = [4, 70, 130, 196, 260, 326, 390, 456, 522, 586, 652, 716]
+
+
+def aggregate_olive(rows: list[list[str]]):
+    sales_by_key: dict[tuple[str, str], int] = defaultdict(int)
+    sales_by_month: dict[str, int] = defaultdict(int)
+
+    for row in rows[3:]:
+        if row[0].strip() != "전체":
+            continue
+        item = row[3].strip()
+        if not item:
+            continue
+        for i, start in enumerate(OLIVE_MONTH_BLOCK_STARTS):
+            year_month = f"{OLIVE_YEAR}-{i + 1:02d}"
+            amount = to_int(row[start + 1])  # 합계 매출
+            sales_by_month[year_month] += amount
+            if amount:
+                sales_by_key[(year_month, item)] = amount
+
+    # 매출이 전혀 없는 (아직 시작 안 된) 달은 제외
+    sales_by_month = {ym: v for ym, v in sales_by_month.items() if v > 0}
+    return sales_by_key, sales_by_month
+
+
 NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
 
-# 이 달부터 인센티브(C~E열) 자동계산 시작. 그 이전 달은 기존 입력값을 그대로 보존
+# 이 달부터 쿠팡 인센티브(C~E열) 자동계산 시작. 그 이전 달은 기존 입력값을 그대로 보존
 INCENTIVE_START_MONTH = "2026-06"
 
-AMOUNT_HEADERS = [
+INCENTIVE_HEADERS = [
     "년월",
-    "입고금액(총단가,단위:원)",
+    "쿠팡 로켓 입고금액(총단가,단위:원)",
     "직전3개월평균대비 증감금액",
     "직전 3개월평균",
-    "인센티브예상금액",
+    "쿠팡 인센티브",
+    "올리브영 매출",
+    "올리브영인센티브 & 내용",
+    "인센티브 총합",
 ]
+
+# 올리브영 월 매출 구간별 인센티브율 (월매출 하한(원), 인센티브율)
+OLIVE_TIERS = [
+    (30_000_000, 0.02),
+    (20_000_000, 0.015),
+    (10_000_000, 0.012),
+    (5_000_000, 0.01),
+    (0, 0.005),
+]
+
+# 최초 구간 돌파 1회성 보너스 (월매출 달성 기준(원), 보너스(원), 표시 라벨)
+OLIVE_BONUS_TIERS = [
+    (3_000_000, 50_000, "300만"),
+    (5_000_000, 100_000, "500만"),
+    (10_000_000, 200_000, "1,000만"),
+    (20_000_000, 300_000, "2,000만"),
+    (30_000_000, 500_000, "3,000만"),
+]
+
+
+def olive_tier_rate(sales: int) -> float:
+    for threshold, rate in OLIVE_TIERS:
+        if sales >= threshold:
+            return rate
+    return 0.0
+
+
+def calc_olive_incentive(sales_by_month: dict, latest_month: str) -> dict:
+    """년월 오름차순으로 등급별 인센티브 + 최초 구간돌파 1회성 보너스를 계산.
+    latest_month(취합 진행중인 당월)은 다음달 실행 시 계산되므로 제외."""
+    months_asc = sorted(ym for ym in sales_by_month if ym < latest_month)
+    achieved = set()
+    result = {}
+    for ym in months_asc:
+        sales = sales_by_month[ym]
+        rate = olive_tier_rate(sales)
+        incentive = round(sales * rate)
+        labels = [f"{rate * 100:g}% 구간"]
+
+        for threshold, bonus, label in OLIVE_BONUS_TIERS:
+            if threshold not in achieved and sales >= threshold:
+                achieved.add(threshold)
+                incentive += bonus
+                labels.append(f"최초 {label} 돌파 보너스 {bonus:,}원")
+
+        result[ym] = (incentive, f"{incentive:,}원 (" + " + ".join(labels) + ")")
+    return result
 
 
 def shift_month(year_month: str, delta: int) -> str:
@@ -121,8 +204,22 @@ def write_inbound_sheet(ws, qty_by_key: dict, amount_by_key: dict, updated_at: s
         ws.format(f"C3:D{2 + len(rows)}", NUMBER_FORMAT)
 
 
-def write_amount_sheet(ws, amount_by_month: dict, updated_at: str):
-    # INCENTIVE_START_MONTH 이전 달의 인센티브(C~E열)는 기존 입력값을 그대로 보존
+def write_olive_sales_sheet(ws, sales_by_key: dict, updated_at: str):
+    # 년월 최신순, 동일 년월 내에서는 품명 오름차순
+    rows = sorted(sales_by_key.items(), key=lambda kv: kv[0][1])
+    rows.sort(key=lambda kv: kv[0][0], reverse=True)
+
+    values = [["마지막 업데이트:", updated_at], ["년월", "품명", "매출액"]]
+    values += [[year_month, item, amount] for (year_month, item), amount in rows]
+
+    ws.clear()
+    ws.update(range_name="A1", values=values, value_input_option="RAW")
+    if rows:
+        ws.format(f"C3:C{2 + len(rows)}", NUMBER_FORMAT)
+
+
+def write_incentive_sheet(ws, amount_by_month: dict, olive_sales_by_month: dict, updated_at: str):
+    # INCENTIVE_START_MONTH 이전 달의 쿠팡 인센티브(C~E열)는 기존 입력값을 그대로 보존
     existing = ws.get_values("A3:E1000", value_render_option="UNFORMATTED_VALUE")
     preserved_cde = {
         row[0]: (row + ["", "", "", "", ""])[2:5]
@@ -133,41 +230,66 @@ def write_amount_sheet(ws, amount_by_month: dict, updated_at: str):
     months_desc = sorted(amount_by_month, reverse=True)
     latest_month = months_desc[0]
 
-    values = [["마지막 업데이트:", updated_at], AMOUNT_HEADERS]
+    olive_incentive = calc_olive_incentive(olive_sales_by_month, latest_month)
+
+    values = [["마지막 업데이트:", updated_at], INCENTIVE_HEADERS]
     for year_month in months_desc:
         amount = amount_by_month[year_month]
         if year_month < INCENTIVE_START_MONTH:
-            change, prev_avg, incentive = preserved_cde.get(year_month, ["", "", ""])
+            change, prev_avg, coupang_incentive = preserved_cde.get(year_month, ["", "", ""])
         elif year_month == latest_month:
             # 당월(데이터 취합 진행중)은 다음달에 계산
-            change, prev_avg, incentive = "", "", ""
+            change, prev_avg, coupang_incentive = "", "", ""
         else:
             prev_avg = round(sum(amount_by_month.get(shift_month(year_month, -i), 0) for i in (1, 2, 3)) / 3)
             change = amount - prev_avg
-            incentive = round(change * 0.01) if change >= 5_000_000 else 0
-        values.append([year_month, amount, change, prev_avg, incentive])
+            coupang_incentive = round(change * 0.01) if change >= 5_000_000 else 0
+
+        olive_sales = olive_sales_by_month.get(year_month, "")
+        olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
+
+        if coupang_incentive == "" and not olive_label:
+            total_incentive = ""
+        else:
+            total_incentive = (coupang_incentive or 0) + olive_total
+
+        values.append([
+            year_month, amount, change, prev_avg, coupang_incentive,
+            olive_sales, olive_label, total_incentive,
+        ])
 
     ws.clear()
     ws.update(range_name="A1", values=values, value_input_option="RAW")
-    ws.format(f"B3:E{2 + len(months_desc)}", NUMBER_FORMAT)
+    ws.format(f"B3:H{2 + len(months_desc)}", NUMBER_FORMAT)
 
 
 def main():
     updated_at = datetime.now(KST).strftime("%Y-%m-%d %H:%M")
 
     client = get_client()
+
     source_ws = get_worksheet(client, SOURCE_SHEET_ID, SOURCE_GID)
     rows = source_ws.get_all_values()
-
     qty_by_key, amount_by_key, amount_by_month = aggregate(rows)
 
     inbound_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_INBOUND)
     write_inbound_sheet(inbound_ws, qty_by_key, amount_by_key, updated_at)
 
-    amount_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_AMOUNT)
-    write_amount_sheet(amount_ws, amount_by_month, updated_at)
+    olive_source_ws = get_worksheet(client, OLIVE_SOURCE_SHEET_ID, OLIVE_SOURCE_GID)
+    olive_rows = olive_source_ws.get_all_values()
+    olive_sales_by_key, olive_sales_by_month = aggregate_olive(olive_rows)
 
-    print(f"완료: {len(qty_by_key)}개 (년월,SKU) 조합, {len(amount_by_month)}개월 업데이트 ({updated_at})")
+    olive_sales_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_OLIVE_SALES)
+    write_olive_sales_sheet(olive_sales_ws, olive_sales_by_key, updated_at)
+
+    incentive_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_INCENTIVE)
+    write_incentive_sheet(incentive_ws, amount_by_month, olive_sales_by_month, updated_at)
+
+    print(
+        f"완료: 쿠팡 {len(qty_by_key)}개 (년월,SKU), "
+        f"올리브영 {len(olive_sales_by_key)}개 (년월,품명), "
+        f"{len(amount_by_month)}개월 업데이트 ({updated_at})"
+    )
 
 
 if __name__ == "__main__":
