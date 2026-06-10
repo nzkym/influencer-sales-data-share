@@ -15,8 +15,14 @@
 
 import re
 import os
+import sys
 import time
 from pathlib import Path
+
+# 윈도우 콘솔(cp949)에서도 ✅ 같은 이모지가 깨지지 않도록 출력 인코딩을 UTF-8로 고정
+if sys.platform == "win32":
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 from datetime import datetime, timedelta, timezone, date
 from concurrent.futures import ThreadPoolExecutor
 
