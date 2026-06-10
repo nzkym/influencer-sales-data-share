@@ -163,7 +163,8 @@ def olive_tier_rate(sales: int) -> float:
 
 def calc_olive_incentive(sales_by_month: dict, latest_month: str) -> dict:
     """년월 오름차순으로 등급별 인센티브 + 최초 구간돌파 1회성 보너스를 계산.
-    latest_month(취합 진행중인 당월)은 다음달 실행 시 계산되므로 제외."""
+    INCENTIVE_START_MONTH 이전 달과 당월(latest_month, 취합 진행중)은 결과에서 제외한다.
+    단, "최초 달성" 판정은 INCENTIVE_START_MONTH 이전 달의 매출도 포함해 누적 추적한다."""
     months_asc = sorted(ym for ym in sales_by_month if ym < latest_month)
     achieved = set()
     result = {}
@@ -173,11 +174,18 @@ def calc_olive_incentive(sales_by_month: dict, latest_month: str) -> dict:
         incentive = round(sales * rate)
         labels = [f"{rate * 100:g}% 구간"]
 
+        bonuses = []
         for threshold, bonus, label in OLIVE_BONUS_TIERS:
             if threshold not in achieved and sales >= threshold:
                 achieved.add(threshold)
-                incentive += bonus
-                labels.append(f"최초 {label} 돌파 보너스 {bonus:,}원")
+                bonuses.append((bonus, label))
+
+        if ym < INCENTIVE_START_MONTH:
+            continue
+
+        for bonus, label in bonuses:
+            incentive += bonus
+            labels.append(f"최초 {label} 돌파 보너스 {bonus:,}원")
 
         result[ym] = (incentive, f"{incentive:,}원 (" + " + ".join(labels) + ")")
     return result
@@ -219,10 +227,11 @@ def write_olive_sales_sheet(ws, sales_by_key: dict, updated_at: str):
 
 
 def write_incentive_sheet(ws, amount_by_month: dict, olive_sales_by_month: dict, updated_at: str):
-    # INCENTIVE_START_MONTH 이전 달의 쿠팡 인센티브(C~E열)는 기존 입력값을 그대로 보존
-    existing = ws.get_values("A3:E1000", value_render_option="UNFORMATTED_VALUE")
-    preserved_cde = {
-        row[0]: (row + ["", "", "", "", ""])[2:5]
+    # INCENTIVE_START_MONTH 이전 달의 인센티브 관련 컬럼(C,D,E,G,H)은 기존 입력값을 그대로 보존
+    # (F=올리브영 매출은 실제 매출 데이터이므로 항상 재계산)
+    existing = ws.get_values("A3:H1000", value_render_option="UNFORMATTED_VALUE")
+    preserved = {
+        row[0]: (row + [""] * 8)[:8]
         for row in existing
         if row and row[0] < INCENTIVE_START_MONTH
     }
@@ -235,23 +244,23 @@ def write_incentive_sheet(ws, amount_by_month: dict, olive_sales_by_month: dict,
     values = [["마지막 업데이트:", updated_at], INCENTIVE_HEADERS]
     for year_month in months_desc:
         amount = amount_by_month[year_month]
+        olive_sales = olive_sales_by_month.get(year_month, "")
+
         if year_month < INCENTIVE_START_MONTH:
-            change, prev_avg, coupang_incentive = preserved_cde.get(year_month, ["", "", ""])
+            prow = preserved.get(year_month, [""] * 8)
+            change, prev_avg, coupang_incentive = prow[2], prow[3], prow[4]
+            olive_label, total_incentive = prow[6], prow[7]
         elif year_month == latest_month:
             # 당월(데이터 취합 진행중)은 다음달에 계산
             change, prev_avg, coupang_incentive = "", "", ""
+            olive_label, total_incentive = "", ""
         else:
             prev_avg = round(sum(amount_by_month.get(shift_month(year_month, -i), 0) for i in (1, 2, 3)) / 3)
             change = amount - prev_avg
             coupang_incentive = round(change * 0.01) if change >= 5_000_000 else 0
 
-        olive_sales = olive_sales_by_month.get(year_month, "")
-        olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
-
-        if coupang_incentive == "" and not olive_label:
-            total_incentive = ""
-        else:
-            total_incentive = (coupang_incentive or 0) + olive_total
+            olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
+            total_incentive = coupang_incentive + olive_total
 
         values.append([
             year_month, amount, change, prev_avg, coupang_incentive,
