@@ -271,11 +271,17 @@ def write_incentive_sheet(
 
     months_desc = sorted(amount_by_month, reverse=True)
     latest_month = months_desc[0]
+    last_row = 2 + len(months_desc)
 
     olive_incentive = calc_olive_incentive(olive_sales_by_month, latest_month)
 
     values = [["마지막 업데이트:", updated_at], INCENTIVE_HEADERS]
-    for year_month in months_desc:
+    # 셀 클릭 시 계산방식이 보이도록 D/E/F/J는 가능하면 시트 수식으로 작성
+    formula_cells: list[tuple[str, str]] = []
+
+    for k, year_month in enumerate(months_desc):
+        r = 3 + k
+        has_prev3 = r + 3 <= last_row  # 직전 3개월 행이 시트에 존재하는지
         amount = amount_by_month[year_month]
         olive_sales = olive_sales_by_month.get(year_month, "")
         total_sales = total_sales_by_month.get(year_month, "")
@@ -294,18 +300,27 @@ def write_incentive_sheet(
             change = amount - prev_avg
             coupang_incentive = round(change * 0.01) if change >= 5_000_000 else 0
 
+            if has_prev3:
+                # D/E/F는 셀 클릭 시 계산방식이 보이도록 수식으로 작성 (B 계산용 값은 위에서 그대로 사용)
+                formula_cells.append((f"E{r}", f"=ROUND(AVERAGE(C{r + 1}:C{r + 3}),0)"))
+                formula_cells.append((f"D{r}", f"=C{r}-E{r}"))
+                formula_cells.append((f"F{r}", f"=IF(D{r}>=5000000,ROUND(D{r}*0.01,0),0)"))
+                change, prev_avg = "", ""
+
             olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
             total_incentive = coupang_incentive + olive_total
 
         # J(직전3개월평균대비증감): 당월은 비워두고 다음달 실행 시 계산
-        if year_month == latest_month or total_sales == "":
+        if year_month == latest_month:
+            total_change = ""
+        elif has_prev3:
+            formula_cells.append((f"J{r}", f"=I{r}-ROUND(AVERAGE(I{r + 1}:I{r + 3}),0)"))
+            total_change = ""
+        elif total_sales == "":
             total_change = ""
         else:
             prev_sales = [total_sales_by_month.get(shift_month(year_month, -i)) for i in (1, 2, 3)]
-            if any(v is None for v in prev_sales):
-                total_change = ""
-            else:
-                total_change = round(total_sales - sum(prev_sales) / 3)
+            total_change = "" if any(v is None for v in prev_sales) else round(total_sales - sum(prev_sales) / 3)
 
         values.append([
             year_month, total_incentive, amount, change, prev_avg,
@@ -314,6 +329,11 @@ def write_incentive_sheet(
 
     ws.batch_clear(["A1:J1000"])
     ws.update(range_name="A1", values=values, value_input_option="RAW")
+    if formula_cells:
+        ws.batch_update(
+            [{"range": cell, "values": [[formula]]} for cell, formula in formula_cells],
+            value_input_option="USER_ENTERED",
+        )
     ws.format(f"B3:J{2 + len(months_desc)}", NUMBER_FORMAT)
 
 
