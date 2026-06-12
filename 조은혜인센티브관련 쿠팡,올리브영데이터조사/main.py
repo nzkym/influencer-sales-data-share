@@ -126,13 +126,13 @@ INCENTIVE_START_MONTH = "2026-06"
 
 INCENTIVE_HEADERS = [
     "년월",
+    "인센티브 총합",
     "쿠팡 로켓 입고금액(총단가,단위:원)",
     "직전3개월평균대비 증감금액",
     "직전 3개월평균",
     "쿠팡 인센티브",
     "올리브영 매출",
     "올리브영인센티브 & 내용",
-    "인센티브 총합",
 ]
 
 # 올리브영 월 매출 구간별 인센티브율 (월매출 하한(원), 인센티브율)
@@ -227,8 +227,9 @@ def write_olive_sales_sheet(ws, sales_by_key: dict, updated_at: str):
 
 
 def write_incentive_sheet(ws, amount_by_month: dict, olive_sales_by_month: dict, updated_at: str):
-    # INCENTIVE_START_MONTH 이전 달의 인센티브 관련 컬럼(C,D,E,G,H)은 기존 입력값을 그대로 보존
-    # (F=올리브영 매출은 실제 매출 데이터이므로 항상 재계산)
+    # INCENTIVE_START_MONTH 이전 달의 인센티브 관련 컬럼(B,D,E,F,H)은 기존 입력값을 그대로 보존
+    # (C=쿠팡 입고금액, G=올리브영 매출은 실제 매출 데이터이므로 항상 재계산)
+    # A~H 영역만 갱신하고, I열 이후(업체 총 매출 등 추가 컬럼)는 손대지 않는다
     existing = ws.get_values("A3:H1000", value_render_option="UNFORMATTED_VALUE")
     preserved = {
         row[0]: (row + [""] * 8)[:8]
@@ -248,8 +249,9 @@ def write_incentive_sheet(ws, amount_by_month: dict, olive_sales_by_month: dict,
 
         if year_month < INCENTIVE_START_MONTH:
             prow = preserved.get(year_month, [""] * 8)
-            change, prev_avg, coupang_incentive = prow[2], prow[3], prow[4]
-            olive_label, total_incentive = prow[6], prow[7]
+            total_incentive = prow[1]
+            change, prev_avg, coupang_incentive = prow[3], prow[4], prow[5]
+            olive_label = prow[7]
         elif year_month == latest_month:
             # 당월(데이터 취합 진행중)은 다음달에 계산
             change, prev_avg, coupang_incentive = "", "", ""
@@ -263,11 +265,11 @@ def write_incentive_sheet(ws, amount_by_month: dict, olive_sales_by_month: dict,
             total_incentive = coupang_incentive + olive_total
 
         values.append([
-            year_month, amount, change, prev_avg, coupang_incentive,
-            olive_sales, olive_label, total_incentive,
+            year_month, total_incentive, amount, change, prev_avg,
+            coupang_incentive, olive_sales, olive_label,
         ])
 
-    ws.clear()
+    ws.batch_clear(["A1:H1000"])
     ws.update(range_name="A1", values=values, value_input_option="RAW")
     ws.format(f"B3:H{2 + len(months_desc)}", NUMBER_FORMAT)
 
