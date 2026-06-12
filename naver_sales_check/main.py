@@ -36,8 +36,8 @@ import base64
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
-SHEET_URL        = os.getenv("SALES_CHECK_SHEET_URL")
-MASTER_SHEET_URL = os.getenv("MASTER_SHEET_URL")
+SHEET_URL          = os.getenv("SALES_CHECK_SHEET_URL")
+GUGU_LOG_SHEET_URL = os.getenv("GUGU_LOG_SHEET_URL")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -60,6 +60,13 @@ STORE_MAP = {
 
 SALE_STATUSES = {"PAYED", "DELIVERING", "DELIVERED", "PURCHASE_DECIDED"}
 KST = timezone(timedelta(hours=9))
+
+# 공구 활동 로그의 상품링크는 영문 스토어명(nutone/jdhealth/nutpet)을 사용
+STORE_SLUG = {"뉴트원": "nutone", "제이디": "jdhealth", "넛펫": "nutpet"}
+
+
+def _store_slug(store_raw: str) -> str:
+    return STORE_SLUG.get(store_raw, store_raw)
 
 
 # ── 구글 시트 ─────────────────────────────────────────────
@@ -299,105 +306,96 @@ def get_period_sales(headers: dict, date_from: str, date_to: str,
     return total, count
 
 
-# ── 공구 캠페인 공제 ──────────────────────────────────────
+# ── 공구 활동 로그 자동탐지 ───────────────────────────────
+# 인플루언서 공구 활동 로그 시트(월별 탭, 삭제되지 않는 누적 기록)에서
+# 해당 스토어/기간과 겹치는 공구 상품번호를 찾아 O열에 자동으로 채워준다.
 
-def load_gugu_campaigns(store: str) -> list:
-    """인플루언서 마스터 시트에서 해당 스토어 공구 캠페인 읽기"""
-    if not MASTER_SHEET_URL:
-        return []
+_gugu_log_sheet = None
+_gugu_log_tabs  = None
+_gugu_log_cache: dict = {}
+
+
+def _get_gugu_log_tabs() -> list:
+    global _gugu_log_sheet, _gugu_log_tabs
+    if _gugu_log_tabs is None:
+        _gugu_log_tabs = []
+        if GUGU_LOG_SHEET_URL:
+            try:
+                gs  = _get_gs_client()
+                sid = _extract_sheet_id(GUGU_LOG_SHEET_URL)
+                _gugu_log_sheet = gs.open_by_key(sid)
+                _gugu_log_tabs  = _gugu_log_sheet.worksheets()
+            except Exception as e:
+                print(f"  [공구로그] 시트 열기 실패: {e}")
+    return _gugu_log_tabs
+
+
+def _parse_gugu_log_period(s: str, year: int):
+    """'26.6.1~6.7', '2026.4/1~4/7' 등 → (시작일, 종료일)"""
+    nums = re.findall(r"\d+", s)
+    if len(nums) != 5:
+        return None
+    _, m1, d1, m2, d2 = (int(n) for n in nums)
     try:
-        gs  = _get_gs_client()
-        sid = _extract_sheet_id(MASTER_SHEET_URL)
-        sp  = gs.open_by_key(sid)
-        gid_m = re.search(r"gid=(\d+)", MASTER_SHEET_URL)
-        ws = (next(s for s in sp.worksheets() if s.id == int(gid_m.group(1)))
-              if gid_m else sp.sheet1)
-        rows = ws.get_all_records()
-    except Exception as e:
-        print(f"  [공구] 마스터 시트 읽기 실패: {e}")
-        return []
+        start = date(year, m1, d1)
+        end   = date(year if m2 >= m1 else year + 1, m2, d2)
+        return (start, end)
+    except ValueError:
+        return None
 
+
+def _load_gugu_log_tab(ws, year: int) -> list:
+    """'A열=기간/종류=공구' 행과 바로 다음 'F열=링크/종류=공구링크' 행 쌍을 파싱"""
     campaigns = []
-    for row in rows:
-        if str(row.get("스토어") or "").strip().lower() != store.lower():
-            continue
-        url       = str(row.get("상품링크") or "").strip()
-        start_str = str(row.get("시작일자") or "").strip()
-        end_str   = str(row.get("종료일자") or "").strip()
-        if not url or not start_str or not end_str:
-            continue
-        try:
-            m = re.search(r"/products/(\d+)", url)
-            if not m:
-                continue
-            campaigns.append({
-                "product_no": m.group(1),
-                "start":      parse_date(start_str),
-                "end":        parse_date(end_str),
-                "title":      str(row.get("제목") or ""),
-            })
-        except Exception:
-            continue
+    try:
+        vals = ws.get_values("A1:H1000")
+    except Exception as e:
+        print(f"  [공구로그] '{ws.title}' 탭 읽기 실패: {e}")
+        return campaigns
+    for i in range(len(vals) - 1):
+        row = vals[i]
+        if len(row) > 1 and row[1].strip() == "공구" and row[0].strip():
+            nxt  = vals[i + 1]
+            link = nxt[5] if len(nxt) > 5 else ""
+            name = nxt[4] if len(nxt) > 4 else ""
+            m = re.search(r"(?:brand|smartstore)\.naver\.com/([a-zA-Z0-9_]+)/products/(\d+)", link)
+            period = _parse_gugu_log_period(row[0], year)
+            if m and period:
+                campaigns.append({
+                    "store":      m.group(1),
+                    "product_no": m.group(2),
+                    "start":      period[0],
+                    "end":        period[1],
+                    "name":       name,
+                })
     return campaigns
 
 
-def calc_gugu_deductions_list(headers: dict, store: str,
-                              period_start: date, period_end: date) -> list:
-    """현재 활성 공구 캠페인별 공제액 목록 반환"""
-    campaigns = load_gugu_campaigns(store)
-    yesterday = datetime.now(KST).date() - timedelta(days=1)
-    eff_end   = min(period_end, yesterday)
-
-    amounts = []
-    for c in campaigns:
-        ol_start = max(period_start, c["start"])
-        ol_end   = min(eff_end,      c["end"])
-        if ol_start > ol_end:
-            continue
-        print(f"    [공구] '{c['title']}' 겹침: {ol_start}~{ol_end}")
-        amount, _ = get_period_sales(
-            headers,
-            ol_start.strftime("%Y-%m-%d"),
-            ol_end.strftime("%Y-%m-%d"),
-            product_no=c["product_no"],
-        )
-        print(f"    [공구] 공제액: {amount:,}원")
-        if amount > 0:
-            amounts.append(amount)
-    return amounts
+def _get_gugu_log_campaigns(year: int, month: int) -> list:
+    """해당 (연,월) 탭의 공구 캠페인 목록 (탭 단위 캐시)"""
+    key = (year, month)
+    if key not in _gugu_log_cache:
+        campaigns = []
+        for ws in _get_gugu_log_tabs():
+            tm = re.match(r"(\d{2})\.(\d+)", ws.title)
+            if tm and (2000 + int(tm.group(1)), int(tm.group(2))) == (year, month):
+                campaigns = _load_gugu_log_tab(ws, year)
+                break
+        _gugu_log_cache[key] = campaigns
+    return _gugu_log_cache[key]
 
 
-def get_existing_deductions_list(cell_val) -> list:
-    """
-    셀 수식에서 개별 공제액 목록 추출.
-    "=89517630-200-100" → [200, 100]
-    """
-    s = str(cell_val).strip()
-    if not s.startswith("="):
-        return []
-    parts = re.split(r"-", s[1:])
-    result = []
-    for p in parts[1:]:
-        p = p.strip()
-        if p.isdigit():
-            result.append(int(p))
-    return result
-
-
-def merge_deductions(existing: list, current_active: list) -> list:
-    """
-    기존 공제 보존 + 새 공제 추가.
-    - 기존 목록은 삭제 불가 (캠페인 삭제 후에도 유지)
-    - 현재 활성 캠페인 중 기존에 없는 금액만 추가
-    """
-    remaining = list(existing)
-    final     = list(existing)
-    for amount in current_active:
-        if amount in remaining:
-            remaining.remove(amount)
-        else:
-            final.append(amount)
-    return final
+def find_gugu_product_ids(store: str, period_start: date, period_end: date) -> set:
+    """공구 활동 로그에서 기간과 겹치는 캠페인의 상품번호 목록 (해당 스토어만)"""
+    ids = set()
+    cur = date(period_start.year, period_start.month, 1)
+    while (cur.year, cur.month) <= (period_end.year, period_end.month):
+        for c in _get_gugu_log_campaigns(cur.year, cur.month):
+            if (c["store"].lower() == store.lower()
+                    and c["start"] <= period_end and c["end"] >= period_start):
+                ids.add(c["product_no"])
+        cur = date(cur.year + 1, 1, 1) if cur.month == 12 else date(cur.year, cur.month + 1, 1)
+    return ids
 
 
 # ── 수식 / 날짜 유틸 ─────────────────────────────────────
@@ -466,8 +464,8 @@ def run_once():
     if not SHEET_URL:
         print("[오류] .env에 SALES_CHECK_SHEET_URL이 없습니다.")
         return
-    if not MASTER_SHEET_URL:
-        print("  [안내] MASTER_SHEET_URL 미설정 → 공구 공제 없이 진행")
+    if not GUGU_LOG_SHEET_URL:
+        print("  [안내] GUGU_LOG_SHEET_URL 미설정 → 공구 자동탐지 없이 진행")
 
     gs = _get_gs_client()
     sheet_id = _extract_sheet_id(SHEET_URL)
@@ -549,6 +547,15 @@ def run_once():
         print(f"  집계: {promo_start}~{promo_actual_end} ({elapsed_days}일 경과)")
         print(f"  비교: {comp_start}~{comp_end} ({promo_total_days}일)")
 
+        # 공구 활동 로그에서 행사/비교 기간과 겹치는 공구 상품번호 자동탐지 → O열 보강
+        discovered = (find_gugu_product_ids(_store_slug(store_raw), promo_start, promo_actual_end)
+                      | find_gugu_product_ids(_store_slug(store_raw), comp_start, comp_end))
+        new_ids = [pid for pid in sorted(discovered) if pid not in manual_ids]
+        if new_ids:
+            print(f"  [공구 자동탐지] O열에 추가: {', '.join(new_ids)}")
+            manual_ids = manual_ids + new_ids
+            batch_updates.append({"range": f"O{sheet_row}", "values": [[",".join(manual_ids)]]})
+
         # 토큰 1회 발급 (행사/비교 기간 모두 재사용)
         try:
             token = _get_access_token(client_id, client_secret)
@@ -572,17 +579,14 @@ def run_once():
             batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
-        # 행사기간 공구 공제 (마스터 시트 + 수동 상품번호)
+        # 행사기간 공구 공제 (O열 상품번호 기준) — 항상 현재 기간 기준으로 재계산
         print(f"  ▷ 행사기간 공구 공제 계산 중...")
-        existing_promo_ded = get_existing_deductions_list(row[8] if len(row) > 8 else "")  # I열(행사매출)
-        active_promo       = calc_gugu_deductions_list(headers_auth, store_raw, promo_start, promo_actual_end)
+        promo_deductions = []
         if manual_ids:
-            manual_promo = calc_manual_deductions(
+            promo_deductions = calc_manual_deductions(
                 headers_auth, manual_ids,
                 promo_start.strftime("%Y-%m-%d"), promo_actual_end.strftime("%Y-%m-%d"),
             )
-            active_promo = active_promo + manual_promo
-        promo_deductions   = merge_deductions(existing_promo_ded, active_promo)
 
         # ── 비교기간 매출 조회 (같은 토큰) ───────────────
         print(f"  ▷ 비교기간 매출 조회 중...")
@@ -597,17 +601,14 @@ def run_once():
             batch_updates.append({"range": f"D{sheet_row}", "values": [[period_text]]})
             continue
 
-        # 비교기간 공구 공제 (마스터 시트 + 수동 상품번호)
+        # 비교기간 공구 공제 (O열 상품번호 기준) — 항상 현재 기간 기준으로 재계산
         print(f"  ▷ 비교기간 공구 공제 계산 중...")
-        existing_comp_ded = get_existing_deductions_list(row[11] if len(row) > 11 else "")  # L열(비교매출)
-        active_comp       = calc_gugu_deductions_list(headers_auth, store_raw, comp_start, comp_end)
+        comp_deductions = []
         if manual_ids:
-            manual_comp = calc_manual_deductions(
+            comp_deductions = calc_manual_deductions(
                 headers_auth, manual_ids,
                 comp_start.strftime("%Y-%m-%d"), comp_end.strftime("%Y-%m-%d"),
             )
-            active_comp = active_comp + manual_comp
-        comp_deductions   = merge_deductions(existing_comp_ded, active_comp)
 
         promo_net = promo_raw - sum(promo_deductions)
         comp_net  = comp_raw  - sum(comp_deductions)
