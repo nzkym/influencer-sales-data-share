@@ -115,6 +115,31 @@ def extract_product_no(url: str) -> str:
     return match.group(1)
 
 
+def _parse_incentive_date(date_str: str):
+    """'26.6.1~6.7' → (date(2026,6,1), date(2026,6,7)), (None,None) on failure."""
+    s = date_str.strip()
+    if "~" not in s:
+        return None, None
+    left, right = s.split("~", 1)
+    left_parts = left.strip().split(".")
+    right_parts = right.strip().split(".")
+    if len(left_parts) != 3:
+        return None, None
+    try:
+        year = 2000 + int(left_parts[0])
+        sm, sd = int(left_parts[1]), int(left_parts[2])
+        if len(right_parts) == 2:
+            em, ed = int(right_parts[0]), int(right_parts[1])
+        elif len(right_parts) == 1:
+            em, ed = sm, int(right_parts[0])
+        else:
+            return None, None
+        ey = year + 1 if em < sm else year
+        return date(year, sm, sd), date(ey, em, ed)
+    except (ValueError, IndexError):
+        return None, None
+
+
 # ── 캠페인 목록 읽기 ─────────────────────────────────────
 def load_campaigns() -> list:
     """
@@ -351,6 +376,92 @@ def load_all_campaigns() -> list:
     return campaigns
 
 
+# ── 인센티브 시트에서 캠페인 읽기 ─────────────────────────
+def load_incentive_campaigns(min_year_month: str = "2026-05") -> list:
+    """인센티브정산 시트(COMM_SHEET_URL)에서 공구 캠페인 목록 읽기.
+    2행 1세트(공구+공구링크) 형식을 파싱한다.
+    """
+    if not COMM_SHEET_URL:
+        return []
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sid = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", COMM_SHEET_URL).group(1)
+        ss = client.open_by_key(sid)
+    except Exception as e:
+        print(f"  [인센티브시트 읽기 실패] {e}")
+        return []
+
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    raw = []
+
+    for ws_tab in ss.worksheets():
+        ym = _tab_year_month(ws_tab.title)
+        if not ym or ym < min_year_month:
+            continue
+        try:
+            rows = ws_tab.get_all_values()
+        except Exception:
+            continue
+
+        i = 0
+        while i < len(rows):
+            row = rows[i]
+            a = row[0].strip() if len(row) > 0 else ""
+            b = row[1].strip() if len(row) > 1 else ""
+            d = row[3].strip() if len(row) > 3 else ""
+
+            if b == "공구" and "~" in a:
+                start_d, end_d = _parse_incentive_date(a)
+                channel = d
+                j = i + 1
+                while j < len(rows):
+                    nr = rows[j]
+                    nb = nr[1].strip() if len(nr) > 1 else ""
+                    na = nr[0].strip() if len(nr) > 0 else ""
+                    if nb == "공구" or (na and "~" in na):
+                        break
+                    if nb == "공구링크":
+                        pname = nr[4].strip() if len(nr) > 4 else ""
+                        purl  = nr[5].strip() if len(nr) > 5 else ""
+                        if start_d and end_d and purl:
+                            sm = re.search(r'brand\.naver\.com/(\w+)', purl)
+                            store = sm.group(1) if sm else ""
+                            pm = re.search(r'/products/(\d+)', purl)
+                            pno = pm.group(1) if pm else ""
+                            if store in STORE_CREDENTIALS and pno:
+                                aid, asec = STORE_CREDENTIALS[store]
+                                if aid and asec:
+                                    raw.append({
+                                        "channel_name": channel,
+                                        "product_name": pname,
+                                        "product_no":   pno,
+                                        "url":          purl.split("?")[0],
+                                        "date_from":    start_d.strftime("%Y-%m-%d"),
+                                        "date_to":      end_d.strftime("%Y-%m-%d"),
+                                        "api_id":       aid,
+                                        "api_secret":   asec,
+                                        "store":        store,
+                                        "sheet_url":    "",
+                                        "is_ended":     end_d < today,
+                                    })
+                    j += 1
+                i = j
+            else:
+                i += 1
+
+    from collections import Counter
+    ch_counts = Counter(c["channel_name"] for c in raw)
+    for c in raw:
+        if ch_counts[c["channel_name"]] > 1:
+            c["title"] = f"{c['channel_name']},{c['product_name']}"
+        else:
+            c["title"] = c["channel_name"]
+
+    return raw
+
+
 def _calc_totals(sales_data: list) -> tuple:
     """판매 데이터에서 총 주문수, 총 제품수 계산 (개별 시트와 동일 방식)."""
     aggregated = sheets._aggregate(sales_data)
@@ -479,6 +590,21 @@ def update_summary_tab():
     """마스터 시트의 '캠페인 실적' 탭 업데이트."""
     KST = timezone(timedelta(hours=9))
     all_campaigns = load_all_campaigns()
+
+    # 인센티브 시트에서 추가 캠페인 병합 (시트1에 없는 것만)
+    incentive = load_incentive_campaigns()
+    if incentive:
+        seen = {(c["product_no"], c["date_from"], c["date_to"]) for c in all_campaigns}
+        added = 0
+        for ic in incentive:
+            key = (ic["product_no"], ic["date_from"], ic["date_to"])
+            if key not in seen:
+                all_campaigns.append(ic)
+                seen.add(key)
+                added += 1
+        if added:
+            print(f"  [인센티브 시트] {added}개 캠페인 추가 로드")
+
     if not all_campaigns:
         return
 
@@ -528,6 +654,9 @@ def update_summary_tab():
                 product_name = naver_api.get_product_name(
                     campaign["api_id"], campaign["api_secret"], campaign["product_no"]
                 )
+            # API에서도 못 가져오면 인센티브 시트 제품명 사용
+            if not product_name:
+                product_name = campaign.get("product_name", "")
             # 합계는 개별 시트에서 읽기 (정확도 우선)
             try:
                 total_orders, total_products, _ = sheets.read_totals_from_sheet(campaign["sheet_url"])
