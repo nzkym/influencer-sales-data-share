@@ -425,6 +425,10 @@ def load_incentive_campaigns(min_year_month: str = "2026-05") -> list:
                     if nb == "공구링크":
                         pname = nr[4].strip() if len(nr) > 4 else ""
                         purl  = nr[5].strip() if len(nr) > 5 else ""
+                        # M열(index 12) 수수료 추출
+                        comm_raw = nr[12].strip() if len(nr) > 12 else ""
+                        comm_m = re.search(r'(\d+(?:\.\d+)?)', comm_raw)
+                        comm_val = float(comm_m.group(1)) if comm_m else ""
                         if start_d and end_d and purl:
                             sm = re.search(r'brand\.naver\.com/(\w+)', purl)
                             store = sm.group(1) if sm else ""
@@ -436,6 +440,7 @@ def load_incentive_campaigns(min_year_month: str = "2026-05") -> list:
                                     raw.append({
                                         "channel_name": channel,
                                         "product_name": pname,
+                                        "incentive_comm": comm_val,
                                         "product_no":   pno,
                                         "url":          purl.split("?")[0],
                                         "date_from":    start_d.strftime("%Y-%m-%d"),
@@ -547,7 +552,7 @@ def _read_comm_map() -> tuple:
 
         for ws_tab in ss_comm.worksheets():
             title_lower = ws_tab.title.lower()
-            if not any(x in title_lower for x in ["월", ".1", ".2", ".3", ".4", ".5", ".6"]):
+            if not any(x in title_lower for x in ["월", ".1", ".2", ".3", ".4", ".5", ".6", ".7", ".8", ".9"]):
                 continue
             ym = _tab_year_month(ws_tab.title)
             try:
@@ -794,6 +799,14 @@ def update_summary_tab():
                             commission = c
                             print(f"  [수수료 상품번호+월 매칭] '{title}' → {c}%")
                             break
+
+        # 4순위: 인센티브 시트에서 직접 가져온 수수료
+        if commission == "":
+            campaign_info_comm = title_to_campaign.get(title, {})
+            ic_comm = campaign_info_comm.get("incentive_comm", "")
+            if ic_comm != "":
+                commission = ic_comm
+                print(f"  [수수료 인센티브시트] '{title}' → {ic_comm}%")
 
         # ── 옵션별 원가 계산 (멀티제품 캠페인) ──────────────────
         # 새로 종료된 캠페인(fetch_titles)에만 개별 시트 읽기 실행
