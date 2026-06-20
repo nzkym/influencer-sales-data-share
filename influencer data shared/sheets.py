@@ -538,11 +538,21 @@ def write_summary_tab(
                         f"-(L{row_sheet}*{ch_comm})"
                         f"-({delivery}*G{row_sheet})"
                     )
+                else:
+                    n_formula = "원가 0원(참고사항 확인)"
+            else:
+                n_formula = "원가제품 미매칭"
+        elif isinstance(revenue, int) and revenue > 0:
+            n_formula = "수수료 누락"
+        elif revenue == "" and commission != "":
+            n_formula = "매출 누락"
+        elif revenue == "":
+            n_formula = "매출·수수료 누락"
 
         # ── O열 이익률 수식 ───────────────────────
         o_formula = (
             f"=IFERROR(N{row_sheet}/L{row_sheet},\"\")"
-            if n_formula else ""
+            if n_formula and n_formula.startswith("=") else ""
         )
 
         values.append([
