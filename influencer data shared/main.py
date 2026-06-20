@@ -595,10 +595,20 @@ def update_summary_tab():
     incentive = load_incentive_campaigns()
     if incentive:
         seen = {(c["product_no"], c["date_from"], c["date_to"]) for c in all_campaigns}
+        # 시트1 sheet_url 매핑 (인센티브 캠페인에 연결용)
+        s1_sheet_by_pno = {}
+        for c in all_campaigns:
+            if c.get("sheet_url"):
+                s1_sheet_by_pno.setdefault(c["product_no"], []).append(c)
         added = 0
         for ic in incentive:
             key = (ic["product_no"], ic["date_from"], ic["date_to"])
             if key not in seen:
+                # 시트1에서 같은 상품번호의 sheet_url 연결
+                for s1c in s1_sheet_by_pno.get(ic["product_no"], []):
+                    if s1c["date_from"] == ic["date_from"] or s1c["date_to"] == ic["date_to"]:
+                        ic["sheet_url"] = s1c["sheet_url"]
+                        break
                 all_campaigns.append(ic)
                 seen.add(key)
                 added += 1
@@ -717,9 +727,26 @@ def update_summary_tab():
         pp           = sheets._match_profit(product_name, profit_params)
 
         # ── 매출(L): 이미 계산된 캠페인은 캐시 그대로 ──────────
+        revenue_refetched = False
         if title not in fetch_titles:
             # kept_rows: 기존 L열 값 재사용 (API 호출 없음)
             revenue = row.get("revenue", "")
+            # 매출 누락 + 종료된 캠페인 → API 재조회
+            if revenue == "" and str(row.get("date_to", "")) < today_str:
+                campaign = title_to_campaign.get(title, {})
+                if campaign and campaign.get("api_id"):
+                    try:
+                        revenue = naver_api.get_campaign_revenue(
+                            campaign["api_id"], campaign["api_secret"],
+                            campaign["product_no"],
+                            campaign.get("date_from", str(row.get("date_from", ""))),
+                            campaign.get("date_to", str(row.get("date_to", ""))),
+                        )
+                        if isinstance(revenue, int):
+                            print(f"  [매출 재조회] {title}: {revenue:,}원")
+                            revenue_refetched = True
+                    except Exception as e:
+                        print(f"  [매출 재조회 실패] {title}: {e}")
         else:
             # fetch_campaigns: 종료 시 1회만 API 조회
             s1_rev = master1_lm.get(title, {}).get("revenue", "")
@@ -777,7 +804,7 @@ def update_summary_tab():
         opt_matched_names = []
         campaign_info = title_to_campaign.get(title, {})
         c_sheet_url   = campaign_info.get("sheet_url", "")
-        if title in fetch_titles and c_sheet_url and isinstance(revenue, int) and revenue > 0:
+        if (title in fetch_titles or revenue_refetched) and c_sheet_url and isinstance(revenue, int) and revenue > 0:
             try:
                 option_totals = sheets.read_option_totals_from_sheet(c_sheet_url)
                 if len(option_totals) >= 2:
