@@ -1080,6 +1080,32 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
     return total, breakdown
 
 
+def _write_pharmabros_revenue_to_i(campaign):
+    """시트1 I열에 네이버 API 매출(취소/반품 제외) 자동 기재."""
+    try:
+        revenue = naver_api.get_campaign_revenue(
+            campaign["api_id"], campaign["api_secret"],
+            campaign["product_no"], campaign["date_from"], campaign["date_to"],
+        )
+        if not revenue:
+            return
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        ws = client.open_by_key(sheet_id).sheet1
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows):
+            if len(row) > 1 and row[1].strip() == campaign["title"]:
+                existing_val = str(row[8]).replace(",", "").strip() if len(row) > 8 else ""
+                if existing_val and existing_val != "0":
+                    return
+                ws.update_cell(i + 1, 9, revenue)
+                print(f"  [파마브로스] I열 매출 기재: {campaign['title'][:30]} → {revenue:,}원")
+                return
+    except Exception as e:
+        print(f"  [파마브로스] I열 기재 실패: {e}")
+
+
 def _write_pharmabros_settlement(title: str, settlement: int, breakdown: list):
     """파마브로스정산 탭에 옵션별 내역 기록."""
     try:
@@ -1187,6 +1213,7 @@ def _backfill_pharmabros_settlements():
         }
 
         print(f"  [파마브로스 백필] {title[:30]} 처리 중...")
+        _write_pharmabros_revenue_to_i(campaign)
         settlement, breakdown = _calc_pharmabros_settlement(campaign)
         if settlement > 0:
             _write_pharmabros_settlement(title, settlement, breakdown)
@@ -1271,8 +1298,9 @@ def _run_pharmabros_if_needed(force: bool = False):
                 drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
             )
 
-            # ── 최종 업로드 시: 정산금액 계산 → I열 + 정산탭 기재
+            # ── 최종 업로드 시: I열 매출 + 정산탭 내역 기재
             if is_final:
+                _write_pharmabros_revenue_to_i(campaign)
                 settlement, breakdown = _calc_pharmabros_settlement(campaign)
                 if settlement > 0:
                     _write_pharmabros_settlement(title, settlement, breakdown)
