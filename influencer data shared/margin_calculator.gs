@@ -86,35 +86,23 @@ function generatePharmabrosSettlement() {
     return;
   }
 
-  // 파마브로스정산 탭에서 옵션별 내역 읽기
-  var optionRows = [];
+  // 파마브로스정산 탭에서 Drive xlsx 기준 매출합계 계산 (취소 제외)
   var totalPayment = 0;
   try {
     var pbTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('파마브로스정산');
     if (pbTab) {
       var pbData = pbTab.getDataRange().getValues();
       for (var i = 1; i < pbData.length; i++) {
-        if (String(pbData[i][0]).trim() === String(title).trim()) {
-          var optName = pbData[i][1] || '';
-          var optPrice = Number(pbData[i][2]) || 0;
-          var optQty = Number(pbData[i][3]) || 0;
-          var optSub = Number(pbData[i][4]) || 0;
-          if (optName) optionRows.push({name: optName, price: optPrice, qty: optQty, sub: optSub});
-          totalPayment += optSub;
-        }
+        if (String(pbData[i][0]).trim() !== String(title).trim()) continue;
+        var status = String(pbData[i][3] || '');
+        if (status.indexOf('취소') >= 0 || status.indexOf('반품') >= 0) continue;
+        totalPayment += Number(pbData[i][7]) || 0;
       }
     }
   } catch(e) {}
 
-  if (!optionRows.length || !totalPayment) {
-    ui.alert(
-      '📦 파마브로스 양식 정산서\n\n'
-      + '캠페인: ' + title + '\n\n'
-      + '옵션별 정산 데이터가 아직 없습니다.\n'
-      + '캠페인 종료 후 서버에서 자동 계산되면\n'
-      + '「파마브로스정산」 탭에 내역이 생성됩니다.\n\n'
-      + '※ 일반 정산서는 [정산서 생성] 버튼을 이용해주세요.'
-    );
+  if (!totalPayment) {
+    ui.alert('파마브로스 정산 데이터가 없습니다.\n서버에서 자동 계산 후 이용 가능합니다.');
     return;
   }
 
@@ -131,18 +119,6 @@ function generatePharmabrosSettlement() {
   } catch(e) {}
 
   var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy년 MM월 dd일');
-
-  // 옵션 내역 HTML
-  var optHtml = '';
-  if (optionRows.length) {
-    optHtml = '<table style="margin-top:16px"><tr class="tbl-head"><td>옵션</td><td>단가</td><td>수량</td><td>소계</td></tr>';
-    for (var k = 0; k < optionRows.length; k++) {
-      var o = optionRows[k];
-      optHtml += '<tr><td>' + o.name + '</td><td>' + o.price.toLocaleString('ko-KR') + '원</td>'
-        + '<td>' + o.qty + '개</td><td>' + o.sub.toLocaleString('ko-KR') + '원</td></tr>';
-    }
-    optHtml += '<tr class="total-row"><td colspan="3">옵션합계 (총 결제금액)</td><td>' + totalPayment.toLocaleString('ko-KR') + '원</td></tr></table>';
-  }
 
   var html = '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>파마브로스 정산서</title><style>'
     + '@page{size:A4;margin:12mm 15mm}*{box-sizing:border-box;margin:0;padding:0}'
@@ -181,7 +157,6 @@ function generatePharmabrosSettlement() {
     + '<tr><td>수수료</td><td>' + (commRate * 100).toFixed(1) + '%</td></tr>'
     + '<tr class="total-row"><td>정산기준금액</td><td>' + settlement.toLocaleString('ko-KR') + '원</td></tr>'
     + '</table>'
-    + optHtml
     + '<div class="company"><div class="company-title">정산 업체 정보</div>'
     + '<div class="company-body">업체명&nbsp;&nbsp;&nbsp;주식회사 정담건강<br>'
     + '사업자번호&nbsp;&nbsp;&nbsp;391-86-00889<br>'
