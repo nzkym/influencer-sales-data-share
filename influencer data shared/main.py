@@ -1347,6 +1347,7 @@ def main():
     if "--test-pharmabros" in sys.argv:
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
         _run_pharmabros_if_needed(force=True)
+        _backfill_pharmabros_settlements()
         return
 
     # GitHub Actions 또는 --once 플래그: 1회 실행 후 종료
