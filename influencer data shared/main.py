@@ -1008,7 +1008,7 @@ def _match_option_price(opt_name: str, prices: dict) -> int:
 
 def _calc_pharmabros_settlement(campaign) -> tuple:
     """Drive xlsx에서 주문 데이터를 읽어 정산금액 계산.
-    반환: (총액, xlsx행리스트)
+    고정 옵션가격이 있으면 적용. 반환: (총액, xlsx행리스트)
     """
     rows = pharmabros.read_xlsx_rows_from_drive(
         client_id=PHARMABROS_OAUTH_CLIENT_ID,
@@ -1021,8 +1021,23 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
         print(f"  [파마브로스정산] Drive 파일 없음: {campaign['title'][:30]}")
         return 0, []
 
+    # 고정 옵션가격 로드
+    price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
+    fixed_prices = {}
+    if price_file.exists():
+        fixed_prices = json.loads(price_file.read_text(encoding="utf-8"))
+
     total = 0
     for r in rows:
+        # 고정가격 적용
+        if fixed_prices:
+            opt = str(r.get("옵션", ""))
+            fixed = _match_option_price(opt, fixed_prices)
+            if fixed:
+                qty = int(r.get("주문수량", 0) or 0)
+                r["단가"] = fixed
+                r["결제금액"] = fixed * qty
+
         status = str(r.get("주문상태", ""))
         if "취소" in status or "반품" in status or "CANCEL" in status.upper() or "RETURN" in status.upper():
             continue
