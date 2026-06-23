@@ -1081,23 +1081,13 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
 
 
 def _write_pharmabros_settlement(title: str, settlement: int, breakdown: list):
-    """시트1 I열에 정산금액 기재 + 파마브로스정산 탭에 내역 기록."""
+    """파마브로스정산 탭에 옵션별 내역 기록."""
     try:
         creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
         client = gspread.authorize(creds)
         sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
         ss = client.open_by_key(sheet_id)
 
-        # I열 기재
-        ws = ss.sheet1
-        rows = ws.get_all_values()
-        for i, row in enumerate(rows):
-            if len(row) > 1 and row[1].strip() == title:
-                ws.update_cell(i + 1, 9, settlement)
-                print(f"  [파마브로스정산] I열 기재: {title[:30]} → {settlement:,}원")
-                break
-
-        # 파마브로스정산 탭에 옵션별 내역 기록
         if breakdown:
             try:
                 pb_ws = ss.worksheet("파마브로스정산")
