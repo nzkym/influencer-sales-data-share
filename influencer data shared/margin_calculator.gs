@@ -94,8 +94,8 @@ function generatePharmabrosSettlement() {
       var pbData = pbTab.getDataRange().getValues();
       for (var i = 1; i < pbData.length; i++) {
         if (String(pbData[i][0]).trim() !== String(title).trim()) continue;
-        var status = String(pbData[i][3] || '');
-        if (status.indexOf('취소') >= 0 || status.indexOf('반품') >= 0) continue;
+        var status = String(pbData[i][3] || '').toUpperCase();
+        if (status.indexOf('취소') >= 0 || status.indexOf('반품') >= 0 || status.indexOf('CANCEL') >= 0 || status.indexOf('RETURN') >= 0) continue;
         totalPayment += Number(pbData[i][7]) || 0;
       }
     }

@@ -1024,7 +1024,7 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
     total = 0
     for r in rows:
         status = str(r.get("주문상태", ""))
-        if "취소" in status or "반품" in status:
+        if "취소" in status or "반품" in status or "CANCEL" in status.upper() or "RETURN" in status.upper():
             continue
         amt = r.get("결제금액", 0)
         if amt:
