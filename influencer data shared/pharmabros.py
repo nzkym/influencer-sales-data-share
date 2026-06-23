@@ -387,15 +387,15 @@ def run_pharmabros(
     return folder_url, [(file_name, file_url)]
 
 
-def read_option_quantities_from_drive(
+def read_xlsx_rows_from_drive(
     client_id: str,
     client_secret: str,
     refresh_token: str,
     folder_id: str,
     title: str,
-) -> dict:
-    """드라이브 폴더에서 해당 캠페인 최종 xlsx를 읽어 옵션별 판매수량 반환.
-    취소(CANCELLED) 제외. 반환: {"선택: 3BOX(30%)": 5, "선택: 6BOX(50%)": 3, ...}
+) -> list:
+    """드라이브 폴더(+완료 하위폴더)에서 해당 캠페인 xlsx를 읽어 전체 행 반환.
+    반환: [{"주문번호":..., "주문일시":..., "주문상태":..., "옵션":..., "주문수량":..., "단가":..., "결제금액":...}, ...]
     """
     import io
     from openpyxl import load_workbook
@@ -403,56 +403,72 @@ def read_option_quantities_from_drive(
     service     = _drive_service_oauth(client_id, client_secret, refresh_token)
     safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
 
-    all_files = service.files().list(
-        q=f"'{folder_id}' in parents and trashed=false",
-        fields="files(id,name,createdTime)",
-        orderBy="createdTime desc",
-    ).execute().get("files", [])
+    # 메인 폴더 + 완료 폴더 모두 검색
+    search_folders = [folder_id]
+    try:
+        done_files = service.files().list(
+            q=f"'{folder_id}' in parents and name='완료' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id)",
+        ).execute().get("files", [])
+        if done_files:
+            search_folders.append(done_files[0]["id"])
+    except Exception:
+        pass
 
     target = None
-    for f in all_files:
-        if f["name"].startswith(safe_prefix) and f["name"].endswith(".xlsx"):
-            target = f
+    for fid in search_folders:
+        files = service.files().list(
+            q=f"'{fid}' in parents and trashed=false",
+            fields="files(id,name,createdTime)",
+            orderBy="createdTime desc",
+        ).execute().get("files", [])
+        for f in files:
+            if f["name"].startswith(safe_prefix) and f["name"].endswith(".xlsx"):
+                target = f
+                break
+        if target:
             break
 
     if not target:
         print(f"  [Drive] '{title}' 파일 없음")
-        return {}
+        return []
 
     print(f"  [Drive] 읽기: {target['name']}")
     content = service.files().get_media(fileId=target["id"]).execute()
     wb = load_workbook(filename=io.BytesIO(content), read_only=True)
     ws = wb.active
 
-    # 헤더에서 옵션/주문수량/주문상태 열 위치 찾기
-    header = [str(c.value or "").strip() for c in ws[1]]
-    col_opt = col_qty = col_status = -1
-    for i, h in enumerate(header):
-        if "옵션" in h:
-            col_opt = i
-        elif "주문수량" in h or "수량" in h:
-            col_qty = i
-        elif "주문상태" in h or "상태" in h:
-            col_status = i
-
-    if col_opt < 0 or col_qty < 0:
-        print(f"  [Drive] 헤더에서 옵션/수량 열 못 찾음: {header}")
+    # 헤더 찾기 (4행이 헤더)
+    header_row = None
+    for row in ws.iter_rows(min_row=1, max_row=10, values_only=True):
+        cells = [str(c or "").strip() for c in row]
+        if "주문번호" in cells:
+            header_row = cells
+            break
+    if not header_row:
         wb.close()
-        return {}
+        return []
 
-    result = {}
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        if not row or not row[col_opt]:
+    header_start = None
+    for i, row in enumerate(ws.iter_rows(min_row=1, max_row=10, values_only=True), 1):
+        cells = [str(c or "").strip() for c in row]
+        if "주문번호" in cells:
+            header_start = i
+            break
+
+    result = []
+    for row in ws.iter_rows(min_row=header_start + 1, values_only=True):
+        if not row or not row[0]:
             continue
-        status = str(row[col_status] or "") if col_status >= 0 else ""
-        if "취소" in status or "CANCEL" in status.upper():
-            continue
-        option = str(row[col_opt]).strip()
-        qty = int(row[col_qty] or 0)
-        result[option] = result.get(option, 0) + qty
+        entry = {}
+        for i, h in enumerate(header_row):
+            if i < len(row) and h:
+                entry[h] = row[i] if row[i] is not None else ""
+        if entry.get("주문번호"):
+            result.append(entry)
 
     wb.close()
-    print(f"  [Drive] 옵션별 수량: {result}")
+    print(f"  [Drive] {len(result)}건 읽기 완료")
     return result
 
 

@@ -1006,36 +1006,34 @@ def _match_option_price(opt_name: str, prices: dict) -> int:
     return 0
 
 
-def _get_orders_from_api(campaign) -> list:
-    """네이버 API에서 주문 데이터 조회 (옵션명 + 수량 + 단가 포함)."""
-    try:
-        return naver_api.get_pharmabros_orders(
-            campaign["api_id"], campaign["api_secret"],
-            campaign["product_no"], campaign["date_from"], campaign["date_to"],
-        )
-    except Exception as e:
-        print(f"  [파마브로스정산] API 조회 실패: {e}")
-        return []
-
-
 def _calc_pharmabros_settlement(campaign) -> tuple:
-    """파마브로스 정산금액: 단가 × 수량 합계 (취소 제외).
-    반환: (총액, 주문리스트)
+    """Drive xlsx에서 주문 데이터를 읽어 정산금액 계산.
+    반환: (총액, xlsx행리스트)
     """
-    orders = _get_orders_from_api(campaign)
-    if not orders:
-        print(f"  [파마브로스정산] 주문 없음: {campaign['title'][:30]}")
+    rows = pharmabros.read_xlsx_rows_from_drive(
+        client_id=PHARMABROS_OAUTH_CLIENT_ID,
+        client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+        refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+        folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+        title=campaign["title"],
+    )
+    if not rows:
+        print(f"  [파마브로스정산] Drive 파일 없음: {campaign['title'][:30]}")
         return 0, []
 
     total = 0
-    for order in orders:
-        status = order.get("주문상태", "")
+    for r in rows:
+        status = str(r.get("주문상태", ""))
         if "취소" in status or "반품" in status:
             continue
-        total += int(order.get("단가", 0)) * int(order.get("주문수량", 0))
+        amt = r.get("결제금액", 0)
+        if amt:
+            total += int(amt)
+        else:
+            total += int(r.get("단가", 0) or 0) * int(r.get("주문수량", 0) or 0)
 
-    print(f"  [파마브로스정산] {campaign['title'][:30]}: {len(orders)}건, 합계 {total:,}원")
-    return total, orders
+    print(f"  [파마브로스정산] {campaign['title'][:30]}: {len(rows)}건, 합계 {total:,}원")
+    return total, rows
 
 
 def _write_pharmabros_revenue_to_i(campaign):
@@ -1064,20 +1062,28 @@ def _write_pharmabros_revenue_to_i(campaign):
         print(f"  [파마브로스] I열 기재 실패: {e}")
 
 
-def _write_pharmabros_settlement(title: str, settlement: int, orders: list):
-    """파마브로스정산 탭에 Drive xlsx 주문 내역 전체 기록."""
+def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list):
+    """파마브로스정산 탭에 Drive xlsx 내용 그대로 기록."""
     try:
         creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
         client = gspread.authorize(creds)
         sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
         ss = client.open_by_key(sheet_id)
 
-        HEADER = ["제목", "주문번호", "주문일시", "주문상태", "옵션", "주문수량", "단가", "결제금액"]
+        # xlsx 헤더에서 칼럼 구성
+        if xlsx_rows:
+            cols = list(xlsx_rows[0].keys())
+        else:
+            cols = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량"]
+        HEADER = ["제목"] + cols
+        ncols = len(HEADER)
+        end_col = chr(64 + min(ncols, 26))
+
         try:
             pb_ws = ss.worksheet("파마브로스정산")
         except gspread.WorksheetNotFound:
-            pb_ws = ss.add_worksheet(title="파마브로스정산", rows=500, cols=len(HEADER))
-            pb_ws.update(f"A1:{chr(64+len(HEADER))}1", [HEADER])
+            pb_ws = ss.add_worksheet(title="파마브로스정산", rows=500, cols=ncols)
+            pb_ws.update(f"A1:{end_col}1", [HEADER])
 
         existing = pb_ws.get_all_values()
         new_rows = [existing[0]] if existing else [HEADER]
@@ -1085,24 +1091,12 @@ def _write_pharmabros_settlement(title: str, settlement: int, orders: list):
             if r and str(r[0]).strip() != title:
                 new_rows.append(r)
 
-        for o in orders:
-            status = o.get("주문상태", "")
-            unit_price = int(o.get("단가", 0))
-            qty = int(o.get("주문수량", 0))
-            new_rows.append([
-                title,
-                o.get("주문번호", ""),
-                o.get("주문일시", ""),
-                status,
-                o.get("옵션", ""),
-                qty,
-                unit_price,
-                unit_price * qty,
-            ])
+        for row in xlsx_rows:
+            new_rows.append([title] + [row.get(c, "") for c in cols])
 
         pb_ws.clear()
-        pb_ws.update(f"A1:{chr(64+len(HEADER))}{len(new_rows)}", new_rows)
-        print(f"  [파마브로스정산] {title[:30]}: {len(orders)}건 기록, 합계 {settlement:,}원")
+        pb_ws.update(f"A1:{end_col}{len(new_rows)}", new_rows)
+        print(f"  [파마브로스정산] {title[:30]}: {len(xlsx_rows)}건 기록")
 
     except Exception as e:
         print(f"  [파마브로스정산] 기재 실패: {e}")
