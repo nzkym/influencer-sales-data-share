@@ -1086,7 +1086,7 @@ def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list):
             pb_ws.update(f"A1:{end_col}1", [HEADER])
 
         existing = pb_ws.get_all_values()
-        new_rows = [existing[0]] if existing else [HEADER]
+        new_rows = [HEADER]
         for r in existing[1:]:
             if r and str(r[0]).strip() != title:
                 new_rows.append(r)
