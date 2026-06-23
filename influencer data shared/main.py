@@ -56,6 +56,7 @@ SCOPES = [
 ]
 
 SOLDOUT_NOTIFIED_FILE = BASE_DIR / "soldout_notified.json"
+PHARMABROS_PRICES_DIR = BASE_DIR / "pharmabros_prices"
 
 # 파마브로스 파일공유 — 사장님 구글 계정 OAuth2 + Drive 폴더
 PHARMABROS_OAUTH_CLIENT_ID     = os.getenv("OAUTH_CLIENT_ID", "")
@@ -960,6 +961,102 @@ def run_once():
     print(f"{'='*55}\n")
 
 
+# ── 파마브로스 정산 계산 ──────────────────────────────────
+def _save_pharmabros_option_prices(campaign) -> dict:
+    """캠페인 중간 시점에 옵션가격 JSON 저장. 이미 저장됐으면 기존값 반환."""
+    PHARMABROS_PRICES_DIR.mkdir(exist_ok=True)
+    price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
+
+    if price_file.exists():
+        return json.loads(price_file.read_text(encoding="utf-8"))
+
+    KST = timezone(timedelta(hours=9))
+    start = datetime.strptime(campaign["date_from"], "%Y-%m-%d").date()
+    end = datetime.strptime(campaign["date_to"], "%Y-%m-%d").date()
+    today = datetime.now(KST).date()
+    mid = start + (end - start) // 2
+
+    if today < mid:
+        return {}
+
+    prices = naver_api.get_product_option_prices(
+        campaign["api_id"], campaign["api_secret"], campaign["product_no"]
+    )
+    if prices:
+        price_file.write_text(json.dumps(prices, ensure_ascii=False), encoding="utf-8")
+        print(f"  [옵션가격 저장] {campaign['title'][:30]}: {len(prices)}개 옵션")
+    return prices
+
+
+def _match_option_price(opt_name: str, prices: dict) -> int:
+    """옵션명에서 BOX 수량 추출 후 가격 매칭."""
+    m = re.search(r'(\d+)\s*(?:bx|box|박스)', opt_name, re.IGNORECASE)
+    if not m:
+        if len(prices) == 1:
+            return list(prices.values())[0]
+        return 0
+    opt_num = int(m.group(1))
+    for price_name, price in prices.items():
+        m2 = re.search(r'(\d+)\s*(?:bx|box|박스)', price_name, re.IGNORECASE)
+        if m2 and int(m2.group(1)) == opt_num:
+            return price
+    return 0
+
+
+def _calc_pharmabros_settlement(campaign) -> int:
+    """파마브로스 정산금액: 옵션가격 × 옵션별수량 합계 (취소 제외)."""
+    price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
+    if price_file.exists():
+        prices = json.loads(price_file.read_text(encoding="utf-8"))
+    else:
+        prices = naver_api.get_product_option_prices(
+            campaign["api_id"], campaign["api_secret"], campaign["product_no"]
+        )
+    if not prices:
+        print(f"  [파마브로스정산] 옵션가격 없음: {campaign['title'][:30]}")
+        return 0
+
+    quantities = pharmabros.read_option_quantities_from_drive(
+        client_id=PHARMABROS_OAUTH_CLIENT_ID,
+        client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+        refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+        folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+        title=campaign["title"],
+    )
+    if not quantities:
+        print(f"  [파마브로스정산] 주문수량 없음: {campaign['title'][:30]}")
+        return 0
+
+    total = 0
+    for opt_name, qty in quantities.items():
+        price = _match_option_price(opt_name, prices)
+        if price:
+            total += price * qty
+            print(f"  [파마브로스정산] {opt_name}: {price:,} × {qty} = {price * qty:,}")
+        else:
+            print(f"  [파마브로스정산] ⚠️ 매칭 실패: '{opt_name}'")
+    print(f"  [파마브로스정산] 총 정산금액: {total:,}원")
+    return total
+
+
+def _write_pharmabros_settlement(title: str, settlement: int):
+    """시트1에서 해당 캠페인 I열에 정산금액 기재."""
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        ws = client.open_by_key(sheet_id).sheet1
+        rows = ws.get_all_values()
+        for i, row in enumerate(rows):
+            if len(row) > 1 and row[1].strip() == title:
+                ws.update_cell(i + 1, 9, settlement)
+                print(f"  [파마브로스정산] I열 기재: {title[:30]} → {settlement:,}원")
+                return
+        print(f"  [파마브로스정산] '{title[:30]}' 행 못 찾음")
+    except Exception as e:
+        print(f"  [파마브로스정산] I열 기재 실패: {e}")
+
+
 def _run_pharmabros_if_needed(force: bool = False):
     """
     파마브로스파일공유여부=파마브로스파일공유 캠페인을 찾아,
@@ -1003,6 +1100,9 @@ def _run_pharmabros_if_needed(force: bool = False):
         end_date   = campaign["date_to"]
         is_final   = campaign["is_final"]
 
+        # ── 캠페인 중간 시점: 옵션가격 저장 ──────────────
+        _save_pharmabros_option_prices(campaign)
+
         if not force:
             run_flag, _ = pharmabros.should_run(start_date, end_date)
             if not run_flag:
@@ -1031,6 +1131,13 @@ def _run_pharmabros_if_needed(force: bool = False):
                 oauth_refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
                 drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
             )
+
+            # ── 최종 업로드 시: 정산금액 계산 → I열 기재 ──
+            if is_final:
+                settlement = _calc_pharmabros_settlement(campaign)
+                if settlement > 0:
+                    _write_pharmabros_settlement(title, settlement)
+
         except Exception as e:
             print(f"  [파마브로스 오류] {e}")
             err_str = str(e)

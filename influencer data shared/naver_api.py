@@ -38,6 +38,62 @@ def get_product_name(client_id: str, client_secret: str, product_no: str) -> str
         print(f"  [상품API] 오류: {e}")
     return ""
 
+
+def get_product_option_prices(client_id: str, client_secret: str, product_no: str) -> dict:
+    """네이버 커머스 API로 상품 옵션별 가격 조회.
+    반환: {"선택: 3BOX(30%)": 33300, "선택: 6BOX(50%)": 55500, ...}
+    """
+    try:
+        token = _get_access_token(client_id, client_secret)
+        headers = {"Authorization": f"Bearer {token}"}
+        resp = requests.get(
+            f"{BASE_URL}/external/v1/products/channel-products/{product_no}",
+            headers=headers,
+            timeout=10,
+        )
+        if not resp.ok:
+            print(f"  [옵션가격] API 실패: {resp.status_code}")
+            return {}
+        data = resp.json()
+        result = {}
+
+        # originProduct.optionInfo.optionCombinations
+        origin = data.get("originProduct") or data
+        opt_info = origin.get("optionInfo") or {}
+        combos = opt_info.get("optionCombinations") or []
+        base_price = int(origin.get("salePrice") or data.get("salePrice") or 0)
+
+        for combo in combos:
+            names = []
+            for k in ["optionName1", "optionName2", "optionName3"]:
+                v = combo.get(k, "")
+                if v:
+                    names.append(v)
+            opt_name = " / ".join(names) if names else ""
+            price = int(combo.get("price") or 0)
+            if price == 0:
+                price = base_price
+            if opt_name:
+                result[opt_name] = price
+
+        # supplementProducts (추가상품)
+        for sp in (origin.get("supplementProducts") or []):
+            sp_name = sp.get("name") or sp.get("productName") or ""
+            sp_price = int(sp.get("price") or 0)
+            if sp_name and sp_price:
+                result[sp_name] = sp_price
+
+        if result:
+            print(f"  [옵션가격] {len(result)}개 옵션: {result}")
+        else:
+            print(f"  [옵션가격] 옵션 없음 (단일상품, 기본가: {base_price})")
+            if base_price:
+                result["기본"] = base_price
+        return result
+    except Exception as e:
+        print(f"  [옵션가격] 오류: {e}")
+        return {}
+
 # 실제 판매로 집계할 주문 상태 (취소/반품 제외)
 SALE_STATUSES = {"PAYED", "DELIVERING", "DELIVERED", "PURCHASE_DECIDED"}
 

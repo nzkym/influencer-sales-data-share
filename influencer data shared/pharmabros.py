@@ -373,6 +373,75 @@ def run_pharmabros(
     return folder_url, [(file_name, file_url)]
 
 
+def read_option_quantities_from_drive(
+    client_id: str,
+    client_secret: str,
+    refresh_token: str,
+    folder_id: str,
+    title: str,
+) -> dict:
+    """드라이브 폴더에서 해당 캠페인 최종 xlsx를 읽어 옵션별 판매수량 반환.
+    취소(CANCELLED) 제외. 반환: {"선택: 3BOX(30%)": 5, "선택: 6BOX(50%)": 3, ...}
+    """
+    import io
+    from openpyxl import load_workbook
+
+    service     = _drive_service_oauth(client_id, client_secret, refresh_token)
+    safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+
+    all_files = service.files().list(
+        q=f"'{folder_id}' in parents and trashed=false",
+        fields="files(id,name,createdTime)",
+        orderBy="createdTime desc",
+    ).execute().get("files", [])
+
+    target = None
+    for f in all_files:
+        if f["name"].startswith(safe_prefix) and f["name"].endswith(".xlsx"):
+            target = f
+            break
+
+    if not target:
+        print(f"  [Drive] '{title}' 파일 없음")
+        return {}
+
+    print(f"  [Drive] 읽기: {target['name']}")
+    content = service.files().get_media(fileId=target["id"]).execute()
+    wb = load_workbook(filename=io.BytesIO(content), read_only=True)
+    ws = wb.active
+
+    # 헤더에서 옵션/주문수량/주문상태 열 위치 찾기
+    header = [str(c.value or "").strip() for c in ws[1]]
+    col_opt = col_qty = col_status = -1
+    for i, h in enumerate(header):
+        if "옵션" in h:
+            col_opt = i
+        elif "주문수량" in h or "수량" in h:
+            col_qty = i
+        elif "주문상태" in h or "상태" in h:
+            col_status = i
+
+    if col_opt < 0 or col_qty < 0:
+        print(f"  [Drive] 헤더에서 옵션/수량 열 못 찾음: {header}")
+        wb.close()
+        return {}
+
+    result = {}
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if not row or not row[col_opt]:
+            continue
+        status = str(row[col_status] or "") if col_status >= 0 else ""
+        if "취소" in status or "CANCEL" in status.upper():
+            continue
+        option = str(row[col_opt]).strip()
+        qty = int(row[col_qty] or 0)
+        result[option] = result.get(option, 0) + qty
+
+    wb.close()
+    print(f"  [Drive] 옵션별 수량: {result}")
+    return result
+
+
 def delete_campaign_files(
     client_id: str,
     client_secret: str,
