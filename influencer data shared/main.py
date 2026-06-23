@@ -1219,6 +1219,35 @@ def _backfill_pharmabros_settlements():
             _write_pharmabros_settlement(title, settlement, breakdown)
             processed += 1
 
+        # 완료 폴더에 xlsx 파일 없으면 재생성
+        try:
+            if all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+                    PHARMABROS_OAUTH_REFRESH_TOKEN, PHARMABROS_DRIVE_FOLDER_ID]):
+                service = pharmabros._drive_service_oauth(
+                    PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+                    PHARMABROS_OAUTH_REFRESH_TOKEN)
+                done_id = pharmabros._get_or_create_done_folder(service, PHARMABROS_DRIVE_FOLDER_ID)
+                safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+                done_files = service.files().list(
+                    q=f"'{done_id}' in parents and trashed=false",
+                    fields="files(name)",
+                ).execute().get("files", [])
+                has_file = any(f["name"].startswith(safe_prefix) for f in done_files)
+                if not has_file:
+                    campaign["is_final"] = True
+                    campaign["url"] = url
+                    pharmabros.run_pharmabros(
+                        campaign=campaign,
+                        credentials_path=CREDENTIALS_PATH,
+                        oauth_client_id=PHARMABROS_OAUTH_CLIENT_ID,
+                        oauth_client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+                        oauth_refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+                        drive_folder_id=done_id,
+                    )
+                    print(f"  [파마브로스 백필] 완료 폴더에 xlsx 생성: {title[:30]}")
+        except Exception as e:
+            print(f"  [파마브로스 백필] xlsx 생성 실패: {e}")
+
     if processed:
         print(f"  [파마브로스 백필] {processed}개 캠페인 정산 완료")
 
