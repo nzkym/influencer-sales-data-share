@@ -165,7 +165,7 @@ def create_excel(
     ws.row_dimensions[3].height = 16
 
     # ── 4행: 헤더 ─────────────────────────────────────────
-    headers = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량", "단가", "결제금액"]
+    headers = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량"]
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=4, column=col, value=h)
         c.font      = WHITE_FONT
@@ -179,18 +179,14 @@ def create_excel(
     for idx, order in enumerate(orders, 1):
         row = idx + 4
         row_fill = EVEN_FILL if idx % 2 == 0 else None
-        unit_price = int(order.get("단가", 0))
-        qty = int(order.get("주문수량", 0))
         values = [
             order.get("주문번호", ""),
             order.get("주문일시", ""),
             order.get("주문상태", ""),
             order.get("옵션", ""),
-            qty,
-            unit_price,
-            unit_price * qty,
+            order.get("주문수량", 0),
         ]
-        aligns = [CENTER, CENTER, CENTER, LEFT, CENTER, CENTER, CENTER]
+        aligns = [CENTER, CENTER, CENTER, LEFT, CENTER]
         for col, (val, aln) in enumerate(zip(values, aligns), 1):
             c = ws.cell(row=row, column=col, value=val)
             c.font      = BODY_FONT
@@ -202,8 +198,7 @@ def create_excel(
 
     # ── 합계 행 ───────────────────────────────────────────
     total_row = len(orders) + 5
-    total_qty = sum(int(o.get("주문수량", 0)) for o in orders)
-    total_amt = sum(int(o.get("단가", 0)) * int(o.get("주문수량", 0)) for o in orders)
+    total_qty = sum(o.get("주문수량", 0) for o in orders)
     ws.merge_cells(f"A{total_row}:D{total_row}")
     tc1 = ws[f"A{total_row}"]
     tc1.value     = "총 주문수량"
@@ -216,13 +211,6 @@ def create_excel(
     tc2.fill      = TOTAL_FILL
     tc2.alignment = CENTER
     tc2.border    = BORDER
-    ws.cell(row=total_row, column=6).fill = TOTAL_FILL
-    ws.cell(row=total_row, column=6).border = BORDER
-    tc3 = ws.cell(row=total_row, column=7, value=total_amt)
-    tc3.font      = TOTAL_FONT
-    tc3.fill      = TOTAL_FILL
-    tc3.alignment = CENTER
-    tc3.border    = BORDER
     ws.row_dimensions[total_row].height = 22
 
     # ── 열 너비 ───────────────────────────────────────────
@@ -231,8 +219,6 @@ def create_excel(
     _col_width(ws, 3, 14)   # 주문상태
     _col_width(ws, 4, 36)   # 옵션
     _col_width(ws, 5, 10)   # 주문수량
-    _col_width(ws, 6, 12)   # 단가
-    _col_width(ws, 7, 12)   # 결제금액
 
     # ── 틀 고정 (4행 헤더 이후) ──────────────────────────
     ws.freeze_panes = "A5"
