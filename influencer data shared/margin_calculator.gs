@@ -106,13 +106,15 @@ function generatePharmabrosSettlement() {
     }
   } catch(e) {}
 
-  // 파마브로스정산 탭이 없거나 데이터가 없으면 I열 값 사용
-  if (!optionRows.length) {
-    totalPayment = Number(String(vals[8]).replace(/[^0-9.]/g, '')) || 0;
-  }
-
-  if (!totalPayment) {
-    ui.alert('정산 데이터가 없습니다.\n캠페인 종료 후 서버에서 자동 계산됩니다.');
+  if (!optionRows.length || !totalPayment) {
+    ui.alert(
+      '📦 파마브로스 양식 정산서\n\n'
+      + '캠페인: ' + title + '\n\n'
+      + '옵션별 정산 데이터가 아직 없습니다.\n'
+      + '캠페인 종료 후 서버에서 자동 계산되면\n'
+      + '「파마브로스정산」 탭에 내역이 생성됩니다.\n\n'
+      + '※ 일반 정산서는 [정산서 생성] 버튼을 이용해주세요.'
+    );
     return;
   }
 

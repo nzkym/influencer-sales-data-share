@@ -958,6 +958,9 @@ def run_once():
     # ── 파마브로스 파일공유 ───────────────────────────────
     _run_pharmabros_if_needed()
 
+    # ── 파마브로스 정산 백필 (종료 캠페인 중 미처리건) ────
+    _backfill_pharmabros_settlements()
+
     print(f"{'='*55}\n")
 
 
@@ -1003,10 +1006,33 @@ def _match_option_price(opt_name: str, prices: dict) -> int:
     return 0
 
 
+def _get_quantities_from_api(campaign) -> dict:
+    """네이버 API에서 직접 옵션별 수량 조회 (Drive 파일 없을 때 fallback)."""
+    try:
+        orders = naver_api.get_pharmabros_orders(
+            campaign["api_id"], campaign["api_secret"],
+            campaign["product_no"], campaign["date_from"], campaign["date_to"],
+        )
+        quantities = {}
+        for order in orders:
+            status = order.get("주문상태", "")
+            if "취소" in status or "CANCEL" in status.upper():
+                continue
+            option = order.get("옵션", "기본 옵션")
+            qty = int(order.get("주문수량", 0))
+            quantities[option] = quantities.get(option, 0) + qty
+        print(f"  [파마브로스정산] API fallback 수량: {quantities}")
+        return quantities
+    except Exception as e:
+        print(f"  [파마브로스정산] API 수량 조회 실패: {e}")
+        return {}
+
+
 def _calc_pharmabros_settlement(campaign) -> tuple:
     """파마브로스 정산금액: 옵션가격 × 옵션별수량 합계 (취소 제외).
     반환: (총액, [{option, price, qty, subtotal}, ...])
     """
+    # 1) 옵션가격
     price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
     if price_file.exists():
         prices = json.loads(price_file.read_text(encoding="utf-8"))
@@ -1014,21 +1040,31 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
         prices = naver_api.get_product_option_prices(
             campaign["api_id"], campaign["api_secret"], campaign["product_no"]
         )
+        if prices:
+            PHARMABROS_PRICES_DIR.mkdir(exist_ok=True)
+            price_file.write_text(json.dumps(prices, ensure_ascii=False), encoding="utf-8")
     if not prices:
         print(f"  [파마브로스정산] 옵션가격 없음: {campaign['title'][:30]}")
         return 0, []
 
-    quantities = pharmabros.read_option_quantities_from_drive(
-        client_id=PHARMABROS_OAUTH_CLIENT_ID,
-        client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
-        refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
-        folder_id=PHARMABROS_DRIVE_FOLDER_ID,
-        title=campaign["title"],
-    )
+    # 2) 옵션별 수량: Drive 우선, 없으면 API fallback
+    quantities = {}
+    if all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+            PHARMABROS_OAUTH_REFRESH_TOKEN, PHARMABROS_DRIVE_FOLDER_ID]):
+        quantities = pharmabros.read_option_quantities_from_drive(
+            client_id=PHARMABROS_OAUTH_CLIENT_ID,
+            client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+            refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+            folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+            title=campaign["title"],
+        )
+    if not quantities:
+        quantities = _get_quantities_from_api(campaign)
     if not quantities:
         print(f"  [파마브로스정산] 주문수량 없음: {campaign['title'][:30]}")
         return 0, []
 
+    # 3) 가격 × 수량
     total = 0
     breakdown = []
     for opt_name, qty in quantities.items():
@@ -1084,6 +1120,90 @@ def _write_pharmabros_settlement(title: str, settlement: int, breakdown: list):
 
     except Exception as e:
         print(f"  [파마브로스정산] 기재 실패: {e}")
+
+
+def _backfill_pharmabros_settlements():
+    """종료된 파마브로스 캠페인 중 정산 탭에 데이터 없는 건 일괄 계산."""
+    if not MASTER_SHEET_URL:
+        return
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        client = gspread.authorize(creds)
+        sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        ss = client.open_by_key(sheet_id)
+        ws = ss.sheet1
+        rows = ws.get_all_records()
+    except Exception as e:
+        print(f"  [파마브로스 백필] 시트 읽기 실패: {e}")
+        return
+
+    # 파마브로스정산 탭에서 이미 처리된 제목 확인
+    existing_titles = set()
+    try:
+        pb_ws = ss.worksheet("파마브로스정산")
+        for r in pb_ws.get_all_values()[1:]:
+            if r:
+                existing_titles.add(str(r[0]).strip())
+    except gspread.WorksheetNotFound:
+        pass
+
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    processed = 0
+
+    for row in rows:
+        k_val = re.sub(r"\s+", "", str(row.get("파마브로스파일공유여부", "")))
+        if k_val != "파마브로스파일공유":
+            continue
+
+        title = str(row.get("제목", "")).strip()
+        if not title or title in existing_titles:
+            continue
+
+        end_str = str(row.get("종료일자", "")).strip()
+        if not end_str:
+            continue
+        try:
+            end_date = parse_date(end_str)
+        except ValueError:
+            continue
+        if end_date >= today:
+            continue
+
+        url   = str(row.get("상품링크", "")).strip()
+        store = str(row.get("스토어", "")).strip().lower()
+        start_str = str(row.get("시작일자", "")).strip()
+
+        if store not in STORE_CREDENTIALS or not url:
+            continue
+        api_id, api_secret = STORE_CREDENTIALS[store]
+        if not api_id or not api_secret:
+            continue
+
+        try:
+            product_no = extract_product_no(url)
+        except ValueError:
+            continue
+
+        campaign = {
+            "title": title,
+            "product_no": product_no,
+            "url": url,
+            "date_from": parse_date(start_str).strftime("%Y-%m-%d"),
+            "date_to": end_date.strftime("%Y-%m-%d"),
+            "api_id": api_id,
+            "api_secret": api_secret,
+            "store": store,
+        }
+
+        print(f"  [파마브로스 백필] {title[:30]} 처리 중...")
+        settlement, breakdown = _calc_pharmabros_settlement(campaign)
+        if settlement > 0:
+            _write_pharmabros_settlement(title, settlement, breakdown)
+            processed += 1
+
+    if processed:
+        print(f"  [파마브로스 백필] {processed}개 캠페인 정산 완료")
 
 
 def _run_pharmabros_if_needed(force: bool = False):
