@@ -356,6 +356,23 @@ def run_pharmabros(
         date_to=query_to,
     )
 
+    # 고정 옵션가격으로 단가 교체
+    from pathlib import Path
+    price_file = Path(__file__).parent / "pharmabros_prices" / f"{campaign['product_no']}.json"
+    if price_file.exists():
+        import json as _json
+        fixed_prices = _json.loads(price_file.read_text(encoding="utf-8"))
+        for order in orders:
+            opt = str(order.get("옵션", ""))
+            m = re.search(r'(\d+)\s*(?:bx|box|박스)', opt, re.IGNORECASE)
+            if m:
+                box_num = m.group(1)
+                for key, price in fixed_prices.items():
+                    if re.search(r'(\d+)', key) and re.search(r'(\d+)', key).group(1) == box_num:
+                        order["단가"] = price
+                        break
+        print(f"  [파마브로스] 고정 옵션가격 적용: {fixed_prices}")
+
     # 엑셀 생성
     product_url = campaign.get("url", "").split("?")[0]  # 쿼리스트링 제거
     excel_bytes = create_excel(
