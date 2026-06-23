@@ -162,27 +162,35 @@ def _query_one_day(headers: dict, from_str: str, to_str: str) -> list:
 
 
 def _get_option_names(headers: dict, order_ids: list) -> tuple:
-    """productOrderIds 배열로 옵션명 + 상품명 조회. 반환: (option_map, product_name)"""
+    """productOrderIds 배열로 옵션명 + 상품명 + 단가 조회.
+    반환: (option_map, product_name, price_map)
+      option_map = {orderId: 옵션명}
+      price_map  = {orderId: unitPrice(int)}
+    """
     if not order_ids:
-        return {}, ""
-    resp = requests.post(
-        f"{BASE_URL}/external/v1/pay-order/seller/product-orders/query",
-        headers={**headers, "Content-Type": "application/json"},
-        json={"productOrderIds": order_ids},
-        timeout=30,
-    )
-    if resp.status_code != 200:
-        return {}, ""
+        return {}, "", {}
     result = {}
     product_name = ""
-    for order in resp.json().get("data", []):
-        po = order.get("productOrder", {})
-        oid = str(po.get("productOrderId", ""))
-        option = po.get("productOption") or ""
-        result[oid] = option
-        if not product_name:
-            product_name = po.get("productName") or ""
-    return result, product_name
+    price_map = {}
+    for start in range(0, len(order_ids), 100):
+        chunk = order_ids[start:start + 100]
+        resp = requests.post(
+            f"{BASE_URL}/external/v1/pay-order/seller/product-orders/query",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"productOrderIds": chunk},
+            timeout=30,
+        )
+        if resp.status_code != 200:
+            continue
+        for order in resp.json().get("data", []):
+            po = order.get("productOrder", {})
+            oid = str(po.get("productOrderId", ""))
+            option = po.get("productOption") or ""
+            result[oid] = option
+            price_map[oid] = int(po.get("unitPrice") or 0)
+            if not product_name:
+                product_name = po.get("productName") or ""
+    return result, product_name, price_map
 
 
 def get_sales_data(
@@ -236,7 +244,7 @@ def get_sales_data(
 
         # 3단계: query 엔드포인트로 옵션명 + 상품명 보완
         order_ids = [m["order_id"] for m in matched]
-        option_map, pname = _get_option_names(headers, order_ids)
+        option_map, pname, _ = _get_option_names(headers, order_ids)
         if pname and not product_name:
             product_name = pname
 
@@ -390,9 +398,9 @@ def get_pharmabros_orders(
         print(f"  → {current.strftime('%Y-%m-%d')}: {matched}건")
         current = next_day
 
-    # 옵션명 보완 (query 엔드포인트)
+    # 옵션명 + 단가 보완 (query 엔드포인트)
     order_ids = [r["order_id"] for r in raw_orders]
-    option_map, _ = _get_option_names(headers, order_ids)
+    option_map, _, price_map = _get_option_names(headers, order_ids)
 
     result = []
     for r in raw_orders:
@@ -402,6 +410,7 @@ def get_pharmabros_orders(
             "주문상태": ORDER_STATUS_KO.get(r["status"], r["status"]),
             "옵션":     option_map.get(r["order_id"]) or "기본 옵션",
             "주문수량": r["quantity"],
+            "단가":     price_map.get(r["order_id"], 0),
         })
 
     # 주문일시 오름차순 정렬

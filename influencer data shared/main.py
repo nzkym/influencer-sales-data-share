@@ -1006,76 +1006,53 @@ def _match_option_price(opt_name: str, prices: dict) -> int:
     return 0
 
 
-def _get_quantities_from_api(campaign) -> dict:
-    """네이버 API에서 직접 옵션별 수량 조회 (Drive 파일 없을 때 fallback)."""
+def _get_orders_from_api(campaign) -> list:
+    """네이버 API에서 주문 데이터 조회 (옵션명 + 수량 + 단가 포함)."""
     try:
-        orders = naver_api.get_pharmabros_orders(
+        return naver_api.get_pharmabros_orders(
             campaign["api_id"], campaign["api_secret"],
             campaign["product_no"], campaign["date_from"], campaign["date_to"],
         )
-        quantities = {}
-        for order in orders:
-            status = order.get("주문상태", "")
-            if "취소" in status or "CANCEL" in status.upper():
-                continue
-            option = order.get("옵션", "기본 옵션")
-            qty = int(order.get("주문수량", 0))
-            quantities[option] = quantities.get(option, 0) + qty
-        print(f"  [파마브로스정산] API fallback 수량: {quantities}")
-        return quantities
     except Exception as e:
-        print(f"  [파마브로스정산] API 수량 조회 실패: {e}")
-        return {}
+        print(f"  [파마브로스정산] API 조회 실패: {e}")
+        return []
 
 
 def _calc_pharmabros_settlement(campaign) -> tuple:
-    """파마브로스 정산금액: 옵션가격 × 옵션별수량 합계 (취소 제외).
+    """파마브로스 정산금액: 옵션단가 × 옵션별수량 합계 (취소 제외).
+    주문 데이터에서 단가와 수량을 함께 가져옴.
     반환: (총액, [{option, price, qty, subtotal}, ...])
     """
-    # 1) 옵션가격
-    price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
-    if price_file.exists():
-        prices = json.loads(price_file.read_text(encoding="utf-8"))
-    else:
-        prices = naver_api.get_product_option_prices(
-            campaign["api_id"], campaign["api_secret"], campaign["product_no"]
-        )
-        if prices:
-            PHARMABROS_PRICES_DIR.mkdir(exist_ok=True)
-            price_file.write_text(json.dumps(prices, ensure_ascii=False), encoding="utf-8")
-    if not prices:
-        print(f"  [파마브로스정산] 옵션가격 없음: {campaign['title'][:30]}")
+    orders = _get_orders_from_api(campaign)
+    if not orders:
+        print(f"  [파마브로스정산] 주문 없음: {campaign['title'][:30]}")
         return 0, []
 
-    # 2) 옵션별 수량: Drive 우선, 없으면 API fallback
-    quantities = {}
-    if all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
-            PHARMABROS_OAUTH_REFRESH_TOKEN, PHARMABROS_DRIVE_FOLDER_ID]):
-        quantities = pharmabros.read_option_quantities_from_drive(
-            client_id=PHARMABROS_OAUTH_CLIENT_ID,
-            client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
-            refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
-            folder_id=PHARMABROS_DRIVE_FOLDER_ID,
-            title=campaign["title"],
-        )
-    if not quantities:
-        quantities = _get_quantities_from_api(campaign)
-    if not quantities:
-        print(f"  [파마브로스정산] 주문수량 없음: {campaign['title'][:30]}")
-        return 0, []
+    # 옵션별 수량 + 단가 집계 (취소 제외)
+    opt_data = {}
+    for order in orders:
+        status = order.get("주문상태", "")
+        if "취소" in status or "반품" in status:
+            continue
+        option = order.get("옵션", "기본 옵션")
+        qty = int(order.get("주문수량", 0))
+        price = int(order.get("단가", 0))
+        if option not in opt_data:
+            opt_data[option] = {"qty": 0, "price": price}
+        opt_data[option]["qty"] += qty
+        if price > 0:
+            opt_data[option]["price"] = price
 
-    # 3) 가격 × 수량
     total = 0
     breakdown = []
-    for opt_name, qty in quantities.items():
-        price = _match_option_price(opt_name, prices)
-        if price:
-            sub = price * qty
-            total += sub
-            breakdown.append({"option": opt_name, "price": price, "qty": qty, "subtotal": sub})
-            print(f"  [파마브로스정산] {opt_name}: {price:,} × {qty} = {sub:,}")
-        else:
-            print(f"  [파마브로스정산] ⚠️ 매칭 실패: '{opt_name}'")
+    for opt_name, data in opt_data.items():
+        price = data["price"]
+        qty = data["qty"]
+        sub = price * qty
+        total += sub
+        breakdown.append({"option": opt_name, "price": price, "qty": qty, "subtotal": sub})
+        print(f"  [파마브로스정산] {opt_name}: {price:,} × {qty} = {sub:,}")
+
     print(f"  [파마브로스정산] 총 정산금액: {total:,}원")
     return total, breakdown
 
@@ -1294,9 +1271,6 @@ def _run_pharmabros_if_needed(force: bool = False):
         start_date = campaign["date_from"]
         end_date   = campaign["date_to"]
         is_final   = campaign["is_final"]
-
-        # ── 캠페인 중간 시점: 옵션가격 저장 ──────────────
-        _save_pharmabros_option_prices(campaign)
 
         if not force:
             run_flag, _ = pharmabros.should_run(start_date, end_date)
