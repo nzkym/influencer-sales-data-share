@@ -1130,15 +1130,7 @@ def _backfill_pharmabros_settlements():
         print(f"  [파마브로스 백필] 시트 읽기 실패: {e}")
         return
 
-    # 파마브로스정산 탭에서 이미 처리된 제목 확인
-    existing_titles = set()
-    try:
-        pb_ws = ss.worksheet("파마브로스정산")
-        for r in pb_ws.get_all_values()[1:]:
-            if r:
-                existing_titles.add(str(r[0]).strip())
-    except gspread.WorksheetNotFound:
-        pass
+    # (기존 데이터가 있어도 항상 재계산 — _write_pharmabros_settlement에서 덮어씀)
 
     KST = timezone(timedelta(hours=9))
     today = datetime.now(KST).date()
@@ -1150,7 +1142,7 @@ def _backfill_pharmabros_settlements():
             continue
 
         title = str(row.get("제목", "")).strip()
-        if not title or title in existing_titles:
+        if not title:
             continue
 
         end_str = str(row.get("종료일자", "")).strip()
