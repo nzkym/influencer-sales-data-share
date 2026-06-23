@@ -442,6 +442,23 @@ def read_option_quantities_from_drive(
     return result
 
 
+def _get_or_create_done_folder(service, parent_folder_id: str) -> str:
+    """'완료' 하위 폴더 ID 반환. 없으면 생성."""
+    results = service.files().list(
+        q=f"'{parent_folder_id}' in parents and name='완료' and mimeType='application/vnd.google-apps.folder' and trashed=false",
+        fields="files(id)",
+    ).execute().get("files", [])
+    if results:
+        return results[0]["id"]
+    folder = service.files().create(body={
+        "name": "완료",
+        "mimeType": "application/vnd.google-apps.folder",
+        "parents": [parent_folder_id],
+    }, fields="id").execute()
+    print(f"  [Drive] '완료' 폴더 생성")
+    return folder["id"]
+
+
 def delete_campaign_files(
     client_id: str,
     client_secret: str,
@@ -449,7 +466,7 @@ def delete_campaign_files(
     folder_id: str,
     title: str,
 ) -> list:
-    """드라이브 폴더에서 해당 캠페인 파일 전부 삭제. 삭제된 파일명 목록 반환."""
+    """드라이브 폴더에서 해당 캠페인 파일을 '완료' 폴더로 이동. 이동된 파일명 목록 반환."""
     service     = _drive_service_oauth(client_id, client_secret, refresh_token)
     safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
 
@@ -458,11 +475,18 @@ def delete_campaign_files(
         fields="files(id,name)",
     ).execute().get("files", [])
 
-    deleted = []
+    moved = []
+    done_folder_id = None
     for f in all_files:
         if f["name"].startswith(safe_prefix):
-            service.files().delete(fileId=f["id"]).execute()
-            deleted.append(f["name"])
-            print(f"  [Drive] 자동 삭제: {f['name']}")
+            if not done_folder_id:
+                done_folder_id = _get_or_create_done_folder(service, folder_id)
+            service.files().update(
+                fileId=f["id"],
+                addParents=done_folder_id,
+                removeParents=folder_id,
+            ).execute()
+            moved.append(f["name"])
+            print(f"  [Drive] 완료 폴더로 이동: {f['name']}")
 
-    return deleted
+    return moved
