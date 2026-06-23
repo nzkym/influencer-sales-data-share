@@ -1003,8 +1003,10 @@ def _match_option_price(opt_name: str, prices: dict) -> int:
     return 0
 
 
-def _calc_pharmabros_settlement(campaign) -> int:
-    """파마브로스 정산금액: 옵션가격 × 옵션별수량 합계 (취소 제외)."""
+def _calc_pharmabros_settlement(campaign) -> tuple:
+    """파마브로스 정산금액: 옵션가격 × 옵션별수량 합계 (취소 제외).
+    반환: (총액, [{option, price, qty, subtotal}, ...])
+    """
     price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
     if price_file.exists():
         prices = json.loads(price_file.read_text(encoding="utf-8"))
@@ -1014,7 +1016,7 @@ def _calc_pharmabros_settlement(campaign) -> int:
         )
     if not prices:
         print(f"  [파마브로스정산] 옵션가격 없음: {campaign['title'][:30]}")
-        return 0
+        return 0, []
 
     quantities = pharmabros.read_option_quantities_from_drive(
         client_id=PHARMABROS_OAUTH_CLIENT_ID,
@@ -1025,36 +1027,63 @@ def _calc_pharmabros_settlement(campaign) -> int:
     )
     if not quantities:
         print(f"  [파마브로스정산] 주문수량 없음: {campaign['title'][:30]}")
-        return 0
+        return 0, []
 
     total = 0
+    breakdown = []
     for opt_name, qty in quantities.items():
         price = _match_option_price(opt_name, prices)
         if price:
-            total += price * qty
-            print(f"  [파마브로스정산] {opt_name}: {price:,} × {qty} = {price * qty:,}")
+            sub = price * qty
+            total += sub
+            breakdown.append({"option": opt_name, "price": price, "qty": qty, "subtotal": sub})
+            print(f"  [파마브로스정산] {opt_name}: {price:,} × {qty} = {sub:,}")
         else:
             print(f"  [파마브로스정산] ⚠️ 매칭 실패: '{opt_name}'")
     print(f"  [파마브로스정산] 총 정산금액: {total:,}원")
-    return total
+    return total, breakdown
 
 
-def _write_pharmabros_settlement(title: str, settlement: int):
-    """시트1에서 해당 캠페인 I열에 정산금액 기재."""
+def _write_pharmabros_settlement(title: str, settlement: int, breakdown: list):
+    """시트1 I열에 정산금액 기재 + 파마브로스정산 탭에 내역 기록."""
     try:
         creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
         client = gspread.authorize(creds)
         sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
-        ws = client.open_by_key(sheet_id).sheet1
+        ss = client.open_by_key(sheet_id)
+
+        # I열 기재
+        ws = ss.sheet1
         rows = ws.get_all_values()
         for i, row in enumerate(rows):
             if len(row) > 1 and row[1].strip() == title:
                 ws.update_cell(i + 1, 9, settlement)
                 print(f"  [파마브로스정산] I열 기재: {title[:30]} → {settlement:,}원")
-                return
-        print(f"  [파마브로스정산] '{title[:30]}' 행 못 찾음")
+                break
+
+        # 파마브로스정산 탭에 옵션별 내역 기록
+        if breakdown:
+            try:
+                pb_ws = ss.worksheet("파마브로스정산")
+            except gspread.WorksheetNotFound:
+                pb_ws = ss.add_worksheet(title="파마브로스정산", rows=200, cols=5)
+                pb_ws.update("A1:E1", [["제목", "옵션", "단가", "수량", "소계"]])
+
+            # 기존 해당 캠페인 행 삭제 후 재기록
+            existing = pb_ws.get_all_values()
+            new_rows = [existing[0]] if existing else [["제목", "옵션", "단가", "수량", "소계"]]
+            for r in existing[1:]:
+                if r and str(r[0]).strip() != title:
+                    new_rows.append(r)
+            for b in breakdown:
+                new_rows.append([title, b["option"], b["price"], b["qty"], b["subtotal"]])
+
+            pb_ws.clear()
+            pb_ws.update(f"A1:E{len(new_rows)}", new_rows)
+            print(f"  [파마브로스정산] 탭 기록: {len(breakdown)}개 옵션")
+
     except Exception as e:
-        print(f"  [파마브로스정산] I열 기재 실패: {e}")
+        print(f"  [파마브로스정산] 기재 실패: {e}")
 
 
 def _run_pharmabros_if_needed(force: bool = False):
@@ -1132,11 +1161,11 @@ def _run_pharmabros_if_needed(force: bool = False):
                 drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
             )
 
-            # ── 최종 업로드 시: 정산금액 계산 → I열 기재 ──
+            # ── 최종 업로드 시: 정산금액 계산 → I열 + 정산탭 기재
             if is_final:
-                settlement = _calc_pharmabros_settlement(campaign)
+                settlement, breakdown = _calc_pharmabros_settlement(campaign)
                 if settlement > 0:
-                    _write_pharmabros_settlement(title, settlement)
+                    _write_pharmabros_settlement(title, settlement, breakdown)
 
         except Exception as e:
             print(f"  [파마브로스 오류] {e}")

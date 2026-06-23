@@ -66,44 +66,130 @@ function onEdit(e) {
   );
 }
 
-// ── 파마브로스 정산 확인 ───────────────────────────────────
-function checkPharmabrosSettlement() {
-  const ui = SpreadsheetApp.getUi();
-  const sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  const row = sheet.getActiveRange().getRow();
+// ── 파마브로스 양식 정산서 ─────────────────────────────────
+function generatePharmabrosSettlement() {
+  var ui    = SpreadsheetApp.getUi();
+  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+  var row   = sheet.getActiveRange().getRow();
   if (row <= 1) { ui.alert('캠페인 행을 먼저 클릭한 뒤 실행해주세요.'); return; }
 
-  const vals = sheet.getRange(row, 1, 1, 11).getValues()[0];
-  const title = vals[1] || '-';
-  const kCol  = String(vals[10] || '').replace(/\s/g, '');
+  var vals = sheet.getRange(row, 1, 1, 11).getValues()[0];
+  var title      = vals[1] || '-';
+  var dateFrom   = vals[2] || '-';
+  var dateTo     = vals[3] || '-';
+  var kCol       = String(vals[10] || '').replace(/\s/g, '');
+  var commission = Number(String(vals[9]).replace(/[^0-9.]/g, '')) || 0;
+  var commRate   = commission > 1 ? commission / 100 : commission;
 
   if (kCol !== '파마브로스파일공유') {
     ui.alert('K열이 "파마브로스파일공유"인 캠페인에서만 사용 가능합니다.');
     return;
   }
 
-  const payment    = Number(String(vals[8]).replace(/[^0-9.]/g, '')) || 0;
-  const commission = Number(String(vals[9]).replace(/[^0-9.]/g, '')) || 0;
-  const commRate   = commission > 1 ? commission / 100 : commission;
-  const settlement = payment > 0 ? Math.round(payment * commRate) : 0;
+  // 파마브로스정산 탭에서 옵션별 내역 읽기
+  var optionRows = [];
+  var totalPayment = 0;
+  try {
+    var pbTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('파마브로스정산');
+    if (pbTab) {
+      var pbData = pbTab.getDataRange().getValues();
+      for (var i = 1; i < pbData.length; i++) {
+        if (String(pbData[i][0]).trim() === String(title).trim()) {
+          var optName = pbData[i][1] || '';
+          var optPrice = Number(pbData[i][2]) || 0;
+          var optQty = Number(pbData[i][3]) || 0;
+          var optSub = Number(pbData[i][4]) || 0;
+          if (optName) optionRows.push({name: optName, price: optPrice, qty: optQty, sub: optSub});
+          totalPayment += optSub;
+        }
+      }
+    }
+  } catch(e) {}
 
-  if (payment > 0) {
-    ui.alert(
-      '📦 파마브로스 정산 확인\n\n'
-      + '캠페인: ' + title + '\n'
-      + '정산기준금액(I열): ' + payment.toLocaleString('ko-KR') + '원\n'
-      + '수수료율(J열): ' + (commRate * 100).toFixed(1) + '%\n'
-      + '정산금액: ' + settlement.toLocaleString('ko-KR') + '원\n\n'
-      + '(서버에서 옵션가격×수량으로 자동 계산된 값입니다)'
-    );
-  } else {
-    ui.alert(
-      '📦 파마브로스 정산 확인\n\n'
-      + '캠페인: ' + title + '\n\n'
-      + 'I열에 정산금액이 아직 입력되지 않았습니다.\n'
-      + '캠페인 종료 후 다음 정각에 자동 계산됩니다.'
-    );
+  // 파마브로스정산 탭이 없거나 데이터가 없으면 I열 값 사용
+  if (!optionRows.length) {
+    totalPayment = Number(String(vals[8]).replace(/[^0-9.]/g, '')) || 0;
   }
+
+  if (!totalPayment) {
+    ui.alert('정산 데이터가 없습니다.\n캠페인 종료 후 서버에서 자동 계산됩니다.');
+    return;
+  }
+
+  var settlement = Math.round(totalPayment * commRate);
+  var productName = '';
+  try {
+    var summary = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('캠페인 실적(자사확인용)');
+    if (summary) {
+      var sRows = summary.getDataRange().getValues();
+      for (var j = 1; j < sRows.length; j++) {
+        if (sRows[j][1] === title) { productName = sRows[j][2] || ''; break; }
+      }
+    }
+  } catch(e) {}
+
+  var today = Utilities.formatDate(new Date(), 'Asia/Seoul', 'yyyy년 MM월 dd일');
+
+  // 옵션 내역 HTML
+  var optHtml = '';
+  if (optionRows.length) {
+    optHtml = '<table style="margin-top:16px"><tr class="tbl-head"><td>옵션</td><td>단가</td><td>수량</td><td>소계</td></tr>';
+    for (var k = 0; k < optionRows.length; k++) {
+      var o = optionRows[k];
+      optHtml += '<tr><td>' + o.name + '</td><td>' + o.price.toLocaleString('ko-KR') + '원</td>'
+        + '<td>' + o.qty + '개</td><td>' + o.sub.toLocaleString('ko-KR') + '원</td></tr>';
+    }
+    optHtml += '<tr class="total-row"><td colspan="3">옵션합계 (총 결제금액)</td><td>' + totalPayment.toLocaleString('ko-KR') + '원</td></tr></table>';
+  }
+
+  var html = '<!DOCTYPE html><html lang="ko"><head><meta charset="UTF-8"><title>파마브로스 정산서</title><style>'
+    + '@page{size:A4;margin:12mm 15mm}*{box-sizing:border-box;margin:0;padding:0}'
+    + 'body{font-family:"Malgun Gothic","맑은 고딕",sans-serif;background:#fff;color:#1a1a2e;max-width:680px;margin:0 auto;padding:0}'
+    + '.print-area{padding:12px 16px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;gap:12px}'
+    + '.btn{background:#1a2744;color:#fff;border:none;padding:9px 22px;cursor:pointer;border-radius:4px;font-size:13px;letter-spacing:0.5px}'
+    + '.btn:hover{background:#2d3f6b}.print-tip{font-size:11px;color:#888;line-height:1.5}'
+    + '.banner{background:linear-gradient(135deg,#1a2744 0%,#2d3f6b 100%);padding:32px 40px 28px;position:relative;overflow:hidden}'
+    + '.banner::after{content:"";position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.05)}'
+    + '.banner-title{color:#fff;font-size:30px;letter-spacing:6px;font-weight:700;margin-bottom:6px}'
+    + '.banner-sub{color:rgba(255,255,255,0.9);font-size:13px;letter-spacing:2px;font-weight:500}'
+    + '.banner-date{color:rgba(255,255,255,0.8);font-size:12px;text-align:right;margin-top:10px}'
+    + '.body{padding:28px 40px 32px}.confirm-box{background:#f0f4ff;border-left:4px solid #1a2744;padding:12px 16px;font-size:14px;color:#333;margin-bottom:24px;line-height:1.6}'
+    + 'table{width:100%;border-collapse:collapse;margin-bottom:6px}'
+    + '.tbl-head td{background:#1a2744;color:#fff;padding:11px 16px;font-size:13px;font-weight:600;letter-spacing:0.5px}'
+    + 'tr td{padding:11px 16px;border-bottom:1px solid #eaecf4;font-size:14px}'
+    + 'tr:nth-child(even) td{background:#f8f9fb}tr td:first-child{color:#555;width:38%}'
+    + '.total-row td{font-weight:700;font-size:15px;color:#1a2744;background:#eef1fa!important;border-top:2px solid #1a2744}'
+    + '.note{font-size:11.5px;color:#888;margin-top:8px;margin-bottom:24px;padding-left:2px}'
+    + '.company{border:1px solid #dde1ee;border-radius:8px;padding:18px 22px;background:#fafbff}'
+    + '.company-title{font-size:13px;font-weight:700;color:#1a2744;margin-bottom:10px;display:flex;align-items:center;gap:6px}'
+    + '.company-title::before{content:"";display:inline-block;width:4px;height:14px;background:#1a2744;border-radius:2px}'
+    + '.company-body{font-size:13px;color:#555;line-height:2}'
+    + '@media print{.print-area{display:none}body{padding:0}}</style></head><body>'
+    + '<div class="print-area"><button class="btn" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>'
+    + '<span class="print-tip">※ 날짜·URL 머리글 제거 방법<br>인쇄 → 더보기 설정 → <b>머리글 및 바닥글</b> 체크 해제</span></div>'
+    + '<div class="banner"><div class="banner-title">정 산 서</div>'
+    + '<div class="banner-sub">SETTLEMENT STATEMENT (파마브로스 양식)</div>'
+    + '<div class="banner-date">발행일: ' + today + '</div></div>'
+    + '<div class="body"><div class="confirm-box">공구진행에 따른 정산내역을 확인합니다.</div>'
+    + '<table><tr class="tbl-head"><td colspan="2">정산 내역</td></tr>'
+    + '<tr><td>인플루언서</td><td>' + title + '</td></tr>'
+    + (productName ? '<tr><td>제품명</td><td>' + productName + '</td></tr>' : '')
+    + '<tr><td>진행기간</td><td>' + dateFrom + ' ~ ' + dateTo + '</td></tr>'
+    + '<tr><td>총 결제금액</td><td>' + totalPayment.toLocaleString('ko-KR') + '원</td></tr>'
+    + '<tr><td>수수료</td><td>' + (commRate * 100).toFixed(1) + '%</td></tr>'
+    + '<tr class="total-row"><td>정산기준금액</td><td>' + settlement.toLocaleString('ko-KR') + '원</td></tr>'
+    + '</table>'
+    + optHtml
+    + '<div class="company"><div class="company-title">정산 업체 정보</div>'
+    + '<div class="company-body">업체명&nbsp;&nbsp;&nbsp;주식회사 정담건강<br>'
+    + '사업자번호&nbsp;&nbsp;&nbsp;391-86-00889<br>'
+    + '주소&nbsp;&nbsp;&nbsp;경기도 시흥시 서울대학로278번길61, 431-2호'
+    + '</div></div>'
+    + '<p class="note">*세금관련부분은 협의된 내용으로 처리가 됩어 실제 입금금액은 위 정산기준금액과 일부 상이할수도있습니다. (ex&gt;부가세여부, 프리랜서공제&lt;3.3%공제된 금액입금&gt; 등)</p>'
+    + '</div></body></html>';
+
+  SpreadsheetApp.getUi().showModalDialog(
+    HtmlService.createHtmlOutput(html).setWidth(740).setHeight(750), '파마브로스 양식 정산서');
 }
 
 // ── 메뉴 등록 ──────────────────────────────────────────────
@@ -111,7 +197,7 @@ function onOpen() {
   const ui = SpreadsheetApp.getUi();
   ui.createMenu('📋 정산서')
     .addItem('정산서 생성', 'generateSettlement')
-    .addItem('파마브로스 정산 확인', 'checkPharmabrosSettlement')
+    .addItem('파마브로스 양식 정산서', 'generatePharmabrosSettlement')
     .addToUi();
   SpreadsheetApp.getActiveSpreadsheet().addMenu("📊 마진계산기", [
     { name: "▶ 계산 실행",       functionName: "runMarginCalc"  },
