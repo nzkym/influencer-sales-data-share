@@ -653,8 +653,8 @@ def run_once():
         # A열 제목 끝에 업데이트 시간 기재
         now_kst = datetime.now(KST)
         row_update_time = f"{now_kst.month}.{now_kst.day} {now_kst.strftime('%H:%M')}"
-        title_base = re.sub(r"\s*\[\d+\.\d+\s+\d+:\d+\]$", "", title)
-        title_with_time = f"{title_base} [{row_update_time}]"
+        title_base = re.sub(r"\s*\[업데이트:\s*\d+\.\d+\s+\d+:\d+\]$", "", title)
+        title_with_time = f"{title_base} [업데이트: {row_update_time}]"
         batch_updates.append({
             "range": f"A{sheet_row}",
             "values": [[title_with_time]],
