@@ -529,8 +529,10 @@ def run_once():
         if elapsed_days <= 0:
             continue
 
-        comp_end   = promo_start - timedelta(days=1)
-        comp_start = comp_end - timedelta(days=promo_total_days - 1)
+        # 비교기간: 전주 같은 요일 기준 (겹치면 더 전주로)
+        weeks_back = -(-promo_total_days // 7)   # ceil(promo_total_days / 7)
+        comp_start = promo_start - timedelta(weeks=weeks_back)
+        comp_end   = comp_start + timedelta(days=promo_total_days - 1)
 
         # 집계기간 텍스트 (D열)
         period_text = (f"{promo_start.month}.{promo_start.day}"
