@@ -650,6 +650,16 @@ def run_once():
             g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 최종증감 (인센티브 정산용)
             print(f"  최종증감: {promo_net - comp_net:+,}원")
 
+        # A열 제목 끝에 업데이트 시간 기재
+        now_kst = datetime.now(KST)
+        row_update_time = f"{now_kst.month}.{now_kst.day} {now_kst.strftime('%H:%M')}"
+        title_base = re.sub(r"\s*\[\d+\.\d+\s+\d+:\d+\]$", "", title)
+        title_with_time = f"{title_base} [{row_update_time}]"
+        batch_updates.append({
+            "range": f"A{sheet_row}",
+            "values": [[title_with_time]],
+        })
+
         # D~M 한 번에 기입 (10개 열)
         batch_updates.append({
             "range": f"D{sheet_row}:M{sheet_row}",
