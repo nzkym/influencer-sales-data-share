@@ -522,6 +522,12 @@ def run_once():
         if promo_start > today:
             continue
 
+        # 종료된 행사 중 G열(최종증감)이 이미 있으면 재계산 스킵
+        existing_g = str(row[6]).strip() if len(row) > 6 else ""
+        if promo_end < today and existing_g:
+            print(f"\n[행 {row_idx+1}] {title} — 종료+계산완료, 스킵")
+            continue
+
         promo_total_days = (promo_end - promo_start).days + 1
         promo_actual_end = min(promo_end, yesterday)
         elapsed_days     = (promo_actual_end - promo_start).days + 1
