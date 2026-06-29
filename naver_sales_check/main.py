@@ -345,28 +345,38 @@ def _parse_gugu_log_period(s: str, year: int):
 
 
 def _load_gugu_log_tab(ws, year: int) -> list:
-    """'A열=기간/종류=공구' 행과 바로 다음 'F열=링크/종류=공구링크' 행 쌍을 파싱"""
+    """공구 행(셀 중 '공구' 텍스트 + 기간 패턴)과 다음 행(네이버 링크)을 열 위치 무관하게 탐색"""
     campaigns = []
     try:
-        vals = ws.get_values("A1:H1000")
+        vals = ws.get_values("A1:Z1000")
     except Exception as e:
         print(f"  [공구로그] '{ws.title}' 탭 읽기 실패: {e}")
         return campaigns
+
+    _LINK_RE = re.compile(r"(?:brand|smartstore)\.naver\.com/([a-zA-Z0-9_]+)/products/(\d+)")
+
     for i in range(len(vals) - 1):
         row = vals[i]
-        if len(row) > 1 and row[1].strip() == "공구" and row[0].strip():
-            nxt  = vals[i + 1]
-            link = nxt[5] if len(nxt) > 5 else ""
-            name = nxt[4] if len(nxt) > 4 else ""
-            m = re.search(r"(?:brand|smartstore)\.naver\.com/([a-zA-Z0-9_]+)/products/(\d+)", link)
-            period = _parse_gugu_log_period(row[0], year)
-            if m and period:
+        has_gugu = any(c.strip() == "공구" for c in row)
+        if not has_gugu:
+            continue
+        period = None
+        for c in row:
+            period = _parse_gugu_log_period(c.strip(), year)
+            if period:
+                break
+        if not period:
+            continue
+        nxt = vals[i + 1]
+        for c in nxt:
+            m = _LINK_RE.search(c)
+            if m:
                 campaigns.append({
                     "store":      m.group(1),
                     "product_no": m.group(2),
                     "start":      period[0],
                     "end":        period[1],
-                    "name":       name,
+                    "name":       "",
                 })
     return campaigns
 
