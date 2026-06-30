@@ -83,8 +83,8 @@ def _extract_sheet_id(url: str) -> str:
     return m.group(1)
 
 
-def _apply_number_format(spreadsheet, ws, data_rows: int):
-    """숫자 열 콤마 서식 + O열 텍스트 서식(상품번호 보호) + 초록색 제거"""
+def _apply_number_format(spreadsheet, ws, data_rows: int, ended_rows: list = None):
+    """숫자 열 콤마 서식 + O열 텍스트 서식(상품번호 보호) + 종료행 G열 주황색"""
     if data_rows < 2:
         return
     R = []
@@ -102,6 +102,20 @@ def _apply_number_format(spreadsheet, ws, data_rows: int):
                 "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}
             }},
             "fields": "userEnteredFormat.numberFormat",
+        }})
+    # G열 주황색: 행사 종료 후 최종증감이 기재된 행만
+    ORANGE = {"red": 1.0, "green": 0.6, "blue": 0.0}
+    for row_1idx in (ended_rows or []):
+        R.append({"repeatCell": {
+            "range": {
+                "sheetId": ws.id,
+                "startRowIndex": row_1idx - 1,
+                "endRowIndex": row_1idx,
+                "startColumnIndex": 6,
+                "endColumnIndex": 7,
+            },
+            "cell": {"userEnteredFormat": {"backgroundColor": ORANGE}},
+            "fields": "userEnteredFormat.backgroundColor",
         }})
     # O열(14): 전체 열을 텍스트 서식으로 고정 (1000행까지)
     # → 상품번호를 콤마 구분으로 입력해도 숫자로 변환되지 않음
@@ -494,6 +508,7 @@ def run_once():
 
     batch_updates = []
     verify_rows   = []   # (sheet_row, title, promo_raw, comp_raw) — 기재 후 재검증용
+    ended_rows    = []   # 종료 확정 행 → G열 주황색 처리용
 
     for row_idx, row in enumerate(all_values):
         if row_idx == 0:
@@ -659,6 +674,7 @@ def run_once():
             e_val = ""
             f_val = ""
             g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 최종증감 (인센티브 정산용)
+            ended_rows.append(sheet_row)
             print(f"  최종증감: {promo_net - comp_net:+,}원")
 
         # A열 제목 끝에 업데이트 시간 기재
@@ -697,7 +713,7 @@ def run_once():
 
     if batch_updates:
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
-        _apply_number_format(spreadsheet, ws, len(all_values))
+        _apply_number_format(spreadsheet, ws, len(all_values), ended_rows)
         print(f"\n✅ 업데이트 완료 ({update_time})")
 
         # ── 재검증: 시트에 기재된 I/L 수식의 원본 매출값이 조회값과 일치하는지 확인
