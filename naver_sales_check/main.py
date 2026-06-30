@@ -493,6 +493,7 @@ def run_once():
     yesterday = today - timedelta(days=1)
 
     batch_updates = []
+    verify_rows   = []   # (sheet_row, title, promo_raw, comp_raw) — 기재 후 재검증용
 
     for row_idx, row in enumerate(all_values):
         if row_idx == 0:
@@ -670,6 +671,8 @@ def run_once():
             "values": [[title_with_time]],
         })
 
+        verify_rows.append((sheet_row, title_base, promo_raw, comp_raw))
+
         # D~M 한 번에 기입 (10개 열)
         batch_updates.append({
             "range": f"D{sheet_row}:M{sheet_row}",
@@ -696,6 +699,30 @@ def run_once():
         ws.batch_update(batch_updates, value_input_option="USER_ENTERED")
         _apply_number_format(spreadsheet, ws, len(all_values))
         print(f"\n✅ 업데이트 완료 ({update_time})")
+
+        # ── 재검증: 시트에 기재된 I/L 수식의 원본 매출값이 조회값과 일치하는지 확인
+        if verify_rows:
+            print("\n── 재검증 ──────────────────────────────────")
+            all_ok = True
+            for vrow, vtitle, vpromo_raw, vcomp_raw in verify_rows:
+                try:
+                    wi = ws.get_values(f"I{vrow}", value_render_option="FORMULA")[0][0]
+                    wl = ws.get_values(f"L{vrow}", value_render_option="FORMULA")[0][0]
+                    i_ok = str(vpromo_raw) in str(wi)
+                    l_ok = str(vcomp_raw)  in str(wl)
+                    ok   = i_ok and l_ok
+                    all_ok = all_ok and ok
+                    mark = "✅" if ok else "❌"
+                    print(f"  {mark} 행{vrow} {vtitle}")
+                    if not i_ok:
+                        print(f"      I열 불일치 — 기대:{vpromo_raw:,} / 시트:{wi}")
+                    if not l_ok:
+                        print(f"      L열 불일치 — 기대:{vcomp_raw:,} / 시트:{wl}")
+                except Exception as e:
+                    print(f"  ⚠️  행{vrow} 재검증 오류: {e}")
+                    all_ok = False
+            print(f"  {'전체 이상없음 ✅' if all_ok else '불일치 항목 있음 — 확인 필요 ❌'}")
+            print("─" * 44)
     else:
         print(f"\n업데이트할 행이 없습니다. ({update_time})")
 
