@@ -859,11 +859,15 @@ def generate_pdf(
     # Scrape summary
     if scrape_results:
         lines = []
-        for period in ["1년", "3개월", "1개월"]:
+        for period in ["3개월", "1개월"]:
             kw_list = scrape_results.get(period, [])
             if kw_list:
                 top5 = ", ".join(k["keyword"] for k in kw_list[:5])
                 lines.append(f"<b>{period}</b> TOP5: {top5}")
+        raw_count = scrape_results.get("raw_candidate_count")
+        filtered_count = scrape_results.get("filtered_count")
+        if raw_count is not None and filtered_count is not None:
+            lines.append(f"전체 카테고리 스윕 원본 후보 {raw_count}개 → AI 관련성 필터 통과 {filtered_count}개")
         if lines:
             story.append(_p("수집된 키워드 현황", S_H2))
             for line in lines:

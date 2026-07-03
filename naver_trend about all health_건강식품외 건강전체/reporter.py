@@ -408,11 +408,15 @@ def format_report(
     # Keyword rankings if available
     if scrape_results:
         sections.append("## 📋 수집된 키워드 현황\n")
-        for period in ["1년", "3개월", "1개월"]:
+        for period in ["3개월", "1개월"]:
             kw_list = scrape_results.get(period, [])
             if kw_list:
                 top5 = ", ".join([k["keyword"] for k in kw_list[:5]])
                 sections.append(f"  {period} TOP 5: {top5}")
+        raw_count = scrape_results.get("raw_candidate_count")
+        filtered_count = scrape_results.get("filtered_count")
+        if raw_count is not None and filtered_count is not None:
+            sections.append(f"  전체 카테고리 스윕 원본 후보 {raw_count}개 → AI 관련성 필터 통과 {filtered_count}개")
         sections.append("")
 
     # Early rising keywords — highlighted at the top
@@ -510,7 +514,7 @@ def format_report(
     if category_notes:
         sections.append(f"\n## 🔔 카테고리 수집 이슈 ({len(category_notes)}건) — 확인 권장\n")
         sections.append("  네이버 쇼핑인사이트 카테고리명이 변경되었거나 수집이 부분적으로 이루어진 항목입니다.")
-        sections.append("  카테고리명이 변경됐을 가능성이 있으면 scraper.py의 HEALTH_CATEGORIES를 확인해 주세요.\n")
+        sections.append("  카테고리명이 변경됐을 가능성이 있으면 scraper.py의 SWEEP_CATEGORY_MAP을 확인해 주세요.\n")
         for name, note in category_notes.items():
             sections.append(f"  ▸ [{name}] {note}")
         sections.append("")

@@ -1,7 +1,11 @@
 """
-네이버 쇼핑인사이트 건강 관련 다중 카테고리 스크래퍼.
-식품 전체 / 생활·건강 / 출산·육아 / 화장품·미용 / 디지털·가전 5개 대분류를
-순차적으로 스크래핑하여 상위 키워드를 수집합니다.
+네이버 쇼핑인사이트 전체 카테고리(건강식품 제외) 스윕 스크래퍼.
+
+건강식품은 별도 프로그램(naver_health_trend)에서 전담하므로 여기서는 제외하고,
+그 외 모든 카테고리를 순위 기준으로 훑어 원본 키워드 풀을 수집한다.
+카테고리 단위로 미리 걸러내지 않는 이유: "어린이아토피로션"처럼 의외의 카테고리에서
+갑자기 뜨는 기회 키워드를 놓치지 않기 위해서다. 관련성 판단은 이 파일이 아니라
+keyword_filter.py의 AI 필터가 키워드 단위로 수행한다 (2026-07-03 아키텍처 변경).
 """
 
 import asyncio
@@ -11,6 +15,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+import requests
 from playwright.async_api import async_playwright, Page, Route, Response
 
 
@@ -19,44 +24,108 @@ CACHE_MAX_AGE_HOURS = 24
 
 DATALAB_URL = "https://datalab.naver.com/shoppingInsight/sCategory.naver"
 
-# 수집 대상 카테고리 목록 (대분류, 중분류 or None, 소분류 or None, 표시명)
-# - 중분류 None → 대분류 전체
-# - 소분류 None → 중분류 전체
-HEALTH_CATEGORIES = [
-    # ── 식품 중분류 (건강 관련) ─────────────────────────────
-    ("식품",        "건강식품",       None,    "식품-건강식품"),
-    ("식품",        "가루/분말류",    None,    "식품-가루분말"),
-    ("식품",        "음료",           None,    "식품-음료"),
-    ("식품",        "다이어트식품",   None,    "식품-다이어트"),
+# 스윕 대상 대분류 → 중분류 목록 (2026-07-03 네이버 데이터랩 드롭다운 실측값).
+# 도서 / 면세점 / 여가·생활편의 는 구조적으로 실물 상품 카테고리가 아니라서 제외.
+# 식품 > 건강식품 은 naver_health_trend가 전담하므로 제외.
+SWEEP_CATEGORY_MAP: dict[str, list[str]] = {
+    "패션의류": ["여성의류", "여성언더웨어/잠옷", "남성의류", "남성언더웨어/잠옷"],
+    "패션잡화": [
+        "여성신발", "남성신발", "신발용품", "여성가방", "남성가방", "여행용가방/소품",
+        "지갑", "벨트", "모자", "장갑", "양말", "선글라스/안경테", "헤어액세서리",
+        "패션소품", "시계", "순금", "주얼리",
+    ],
+    "화장품/미용": [
+        "스킨케어", "베이스메이크업", "색조메이크업", "클렌징", "마스크/팩", "선케어",
+        "남성화장품", "향수", "바디케어", "헤어케어", "헤어스타일링", "네일케어", "뷰티소품",
+    ],
+    "디지털/가전": [
+        "노트북", "노트북액세서리", "휴대폰액세서리", "PC", "모니터", "영상가전", "음향가전",
+        "생활가전", "이미용가전", "카메라/캠코더용품", "주방가전", "자동차기기", "계절가전",
+        "휴대폰", "학습기기", "게임기/타이틀", "PC액세서리", "태블릿PC", "태블릿PC액세서리",
+        "모니터주변기기", "주변기기", "멀티미디어장비", "저장장치", "PC부품", "네트워크장비",
+        "소프트웨어", "광학기기/용품", "청소기",
+    ],
+    "가구/인테리어": [
+        "침실가구", "거실가구", "주방가구", "수납가구", "아동/주니어가구", "서재/사무용가구",
+        "아웃도어가구", "DIY자재/용품", "인테리어소품", "침구단품", "침구세트", "솜류",
+        "카페트/러그", "커튼/블라인드", "홈데코", "수예", "베개",
+    ],
+    "출산/육아": [
+        "분유", "기저귀", "물티슈", "이유식", "아기간식", "수유용품", "유모차", "카시트",
+        "외출용품", "목욕용품", "스킨/바디용품", "위생/건강용품", "구강청결용품", "유아세제",
+        "소독/살균용품", "매트/안전용품", "유아가구/소품", "이유식용품", "임부복", "임산부용품",
+        "유아침구", "출산/돌기념품", "신생아의류", "유아동의류", "유아동언더웨어/잠옷",
+        "유아동잡화", "수영복/용품", "유아동 주얼리", "유아발육용품", "완구/인형", "교구",
+    ],
+    "식품": [
+        "축산물", "수산물", "농산물", "반찬", "김치", "음료", "유가공품", "냉동/간편조리식품",
+        # "건강식품" 제외 — naver_health_trend 전담
+        "다이어트식품", "통조림/캔", "제과/제빵재료", "조미료", "식용유/오일", "소스/드레싱",
+        "가루/분말류", "잼/시럽", "라면/면류", "장류", "밀키트", "주류", "떡류", "즉석밥/즉석국",
+        "젤리/사탕/초콜릿", "스낵/과자", "전통과자", "빵/베이커리", "아이스크림/빙수",
+    ],
+    "스포츠/레저": [
+        "등산", "캠핑", "골프", "자전거", "스키/보드", "낚시", "수영", "헬스", "요가/필라테스",
+        "스케이트/보드/롤러", "오토바이/스쿠터", "축구", "야구", "농구", "배구", "탁구",
+        "배드민턴", "테니스", "스쿼시", "족구", "볼링", "스킨스쿠버", "검도", "댄스", "권투",
+        "보호용품", "무술용품", "수련용품", "스포츠액세서리", "러닝용품", "당구용품", "기타스포츠용품",
+    ],
+    "생활/건강": [
+        "공구", "문구/사무용품", "화방용품", "자동차용품", "수집품", "관상어용품", "악기",
+        "반려동물", "음반", "DVD", "종교", "주방용품", "세탁용품", "건강측정용품", "건강관리용품",
+        "당뇨관리용품", "의료용품", "실버용품", "재활운동용품", "물리치료/저주파용품",
+        "좌욕/좌훈용품", "냉온/찜질용품", "구강위생용품", "눈건강용품", "발건강용품",
+        "원예/식물", "정원/원예용품", "안마용품", "블루레이", "욕실용품", "수납/정리용품",
+        "청소용품", "생활용품", "자동차",
+    ],
+}
 
-    # ── 생활/건강 중분류 (건강 관련만, 생활잡화·주방·청소 제외) ──
-    ("생활/건강",   "건강관리용품",   None,    "생활건강-건강관리"),
-    ("생활/건강",   "욕실/위생용품",  None,    "생활건강-욕실위생"),
-    ("생활/건강",   "반려동물용품",   None,    "생활건강-반려동물"),
-
-    # ── 출산/육아 중분류 (식품·건강만, 의류·완구·유모차 제외) ──
-    ("출산/육아",   "분유/이유식",    None,    "출산-분유이유식"),
-    ("출산/육아",   "아기간식/음료",  None,    "출산-아기간식"),
-    ("출산/육아",   "아기위생/건강",  None,    "출산-아기건강"),
-    ("출산/육아",   "임신/출산용품",  None,    "출산-임신출산"),
-
-    # ── 화장품/미용 중분류 ──────────────────────────────────
-    ("화장품/미용", "기초화장품",     None,    "화장품-기초"),
-    ("화장품/미용", "바디케어",       None,    "화장품-바디"),
-    ("화장품/미용", "헤어케어",       None,    "화장품-헤어"),
-    ("화장품/미용", "색조화장품",     None,    "화장품-색조"),  # 선크림 등 포함
-
-    # ── 디지털/가전 — 건강·미용 관련 소분류 ────────────────
-    ("디지털/가전", "이미용가전",     None,            "이미용가전"),
-    ("디지털/가전", "생활가전",       "구강청정기",    "가전-구강청정기"),
-    ("디지털/가전", "생활가전",       "손소독기/손세정기", "가전-손소독기"),
-    ("디지털/가전", "생활가전",       "적외선소독기",  "가전-적외선소독기"),
-    ("디지털/가전", "생활가전",       "이온수기",      "가전-이온수기"),
-    ("디지털/가전", "생활가전",       "해충퇴치기",    "가전-해충퇴치기"),
+# (대분류, 중분류, 표시명) 튜플 리스트로 평탄화
+SWEEP_CATEGORIES: list[tuple[str, str, str]] = [
+    (main_cat, sub_cat, f"{main_cat}-{sub_cat}")
+    for main_cat, sub_list in SWEEP_CATEGORY_MAP.items()
+    for sub_cat in sub_list
 ]
+
+# 스윕 단계 수집 기간 — 급상승 포착에 집중 (장기 트렌드는 필터 통과 후 별도 API로 정밀 조회하므로
+# 여기서는 최근 변화만 보면 충분. 2026-07-03: 3개 기간 → 2개로 단축해 스캔 시간 절반 이하로 축소)
+SWEEP_PERIODS = ["3개월", "1개월"]
+
+# 실버산업(고령친화) 우선순위 카테고리 — 통합 점수 산정 시 가중치 부여
+SILVER_PRIORITY_CATEGORIES = {
+    "생활/건강-실버용품",
+    "생활/건강-의료용품",
+    "생활/건강-재활운동용품",
+    "생활/건강-안마용품",
+    "생활/건강-건강측정용품",
+    "생활/건강-당뇨관리용품",
+}
+SILVER_PRIORITY_WEIGHT = 1.5
 
 # 카테고리당 수집 최대 키워드 수
 MAX_RANK_PER_CATEGORY = 500
+
+# 연속으로 이 횟수만큼 "카테고리 선택은 됐는데 키워드가 0개"가 반복되면
+# 이름 불일치가 아니라 네이버 차단(레이트리밋/캡차) 가능성이 높다고 판단하고 중단 + 알림
+BLOCK_SUSPECT_STREAK = 6
+
+
+def _send_telegram_alert(message: str) -> None:
+    """차단 의심 등 긴급 상황을 텔레그램으로 즉시 알림."""
+    token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    if not token or not chat_id:
+        print("[알림] TELEGRAM_BOT_TOKEN/CHAT_ID 미설정 — 텔레그램 알림 건너뜀")
+        return
+    try:
+        requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            data={"chat_id": chat_id, "text": message},
+            timeout=10,
+        )
+        print("[알림] 텔레그램 알림 발송 완료")
+    except Exception as e:
+        print(f"[알림] 텔레그램 알림 발송 실패: {e}")
 
 
 def _load_cache() -> Optional[dict]:
@@ -312,7 +381,7 @@ async def _scrape_keywords_from_dom(page: Page) -> list[dict]:
 
 
 async def get_top_keywords(
-    period: str = "1년",
+    period: str = "3개월",
     main_cat: str = "식품",
     sub_cat: Optional[str] = None,
     sub_sub_cat: Optional[str] = None,
@@ -355,15 +424,25 @@ async def get_top_keywords(
             await page.goto(DATALAB_URL, wait_until="domcontentloaded", timeout=30000)
             await asyncio.sleep(3)
 
+            # 네이버 차단/캡차 페이지 감지 (레이트리밋 의심 시 즉시 상위로 보고)
+            page_text = await page.inner_text("body")
+            if any(marker in page_text for marker in ["자동입력 방지", "비정상적인 접근", "일시적으로 제한", "이용이 제한"]):
+                print("[스크래퍼] ⚠️ 네이버 차단/캡차 페이지로 추정됨")
+                return [], "BLOCKED"
+
             # 카테고리 선택
             success, note = await _select_naver_category_by_name(page, main_cat, sub_cat, sub_sub_cat)
             if note:
                 failure_note = note
-            if success:
-                print(f"[스크래퍼] 카테고리 선택 완료: {cat_label}{' (부분)' if note else ''}")
-            else:
-                print(f"[스크래퍼] 카테고리 선택 실패 — {note}")
 
+            if not success:
+                # 카테고리 선택 실패 시 절대 진행하지 않음 — 엉뚱한 카테고리(예: 기본 화면에 남은
+                # 카테고리)로 스크래핑되어 무관한 키워드가 섞이는 것을 방지 (2026-07-03 수정)
+                print(f"[스크래퍼] 카테고리 선택 실패 — {note}")
+                print(f"[스크래퍼] {cat_label} 스크래핑을 건너뜁니다 (오염 방지)")
+                return [], failure_note
+
+            print(f"[스크래퍼] 카테고리 선택 완료: {cat_label}{' (부분)' if note else ''}")
             await asyncio.sleep(2)
 
             # 기간 선택
@@ -466,42 +545,57 @@ async def get_all_period_keywords(
     use_cache: bool = True,
 ) -> dict:
     """
-    건강 관련 카테고리 × 3개 기간 스크래핑하여 키워드를 수집합니다.
+    건강식품 제외 전체 카테고리(SWEEP_CATEGORIES) × SWEEP_PERIODS 스크래핑하여
+    원본 키워드 풀을 수집합니다. 관련성 필터링은 여기서 하지 않고 keyword_filter.py가 담당.
 
     Returns:
         {
-            "1년":    [{"rank":1, "keyword":"...", "category":"..."},  ...],
-            "3개월":  [...],
+            "3개월":  [{"rank":1, "keyword":"...", "category":"..."},  ...],
             "1개월":  [...],
             "combined": [unique keywords sorted by composite score],
             "category_notes": {"display_name": "failure_note", ...},  # 카테고리 이슈 메모
+            "blocked": bool,  # 네이버 차단 의심으로 중간에 중단했는지 여부
             "cached_at": "ISO datetime"
         }
     """
     if use_cache:
         cached = _load_cache()
-        if cached and all(p in cached for p in ["1년", "3개월", "1개월"]):
+        if cached and all(p in cached for p in SWEEP_PERIODS):
             return cached
 
-    results: dict[str, list] = {"1년": [], "3개월": [], "1개월": []}
-    periods = ["1년", "3개월", "1개월"]
-    period_weights = {"1년": 1, "3개월": 2, "1개월": 3}
+    results: dict[str, list] = {p: [] for p in SWEEP_PERIODS}
+    period_weights = {"3개월": 2, "1개월": 3}
     category_notes: dict[str, str] = {}  # display_name → 최초 발견된 이슈 메모
+    blocked = False
+    consecutive_empty_selected = 0  # 카테고리 선택은 성공했는데 키워드가 0개인 연속 횟수
 
-    for main_cat, sub_cat, sub_sub_cat, display_name in HEALTH_CATEGORIES:
-        print(f"\n[스크래퍼] ===== 카테고리: {display_name} =====")
-        for period in periods:
+    total = len(SWEEP_CATEGORIES)
+    for idx, (main_cat, sub_cat, display_name) in enumerate(SWEEP_CATEGORIES, start=1):
+        print(f"\n[스크래퍼] ===== [{idx}/{total}] 카테고리: {display_name} =====")
+        for period in SWEEP_PERIODS:
             try:
                 keywords, note = await get_top_keywords(
                     period=period,
                     main_cat=main_cat,
                     sub_cat=sub_cat,
-                    sub_sub_cat=sub_sub_cat,
+                    sub_sub_cat=None,
                     max_rank=max_rank,
                 )
+
+                if note == "BLOCKED":
+                    blocked = True
+                    break
+
                 # 카테고리 이슈 메모 수집 (중복 저장 방지)
                 if note and display_name not in category_notes:
                     category_notes[display_name] = note
+
+                # 차단 의심 감지: 카테고리 선택은 됐는데(note가 이름불일치가 아님) 결과가 0개인 경우
+                if not keywords and not note:
+                    consecutive_empty_selected += 1
+                else:
+                    consecutive_empty_selected = 0
+
                 # 카테고리 정보 태그 추가
                 for kw in keywords:
                     kw["category"] = display_name
@@ -510,18 +604,39 @@ async def get_all_period_keywords(
                 await asyncio.sleep(3)
             except Exception as e:
                 print(f"[스크래퍼] {display_name}/{period} 스크래핑 실패: {e}")
+
+            if consecutive_empty_selected >= BLOCK_SUSPECT_STREAK:
+                blocked = True
+                break
+
+        if blocked:
+            print(f"\n[스크래퍼] ⚠️ 네이버 차단/레이트리밋 의심 — {idx}/{total}번째 카테고리에서 스윕 중단")
+            _send_telegram_alert(
+                "⚠️ [네이버 트렌드 스윕] 네이버 차단(레이트리밋/캡차)이 의심되어 스크래핑을 중단했습니다.\n\n"
+                f"진행 상황: {idx}/{total}개 카테고리 처리 중 중단\n"
+                f"지금까지 수집된 데이터만으로 리포트를 생성합니다.\n"
+                f"다음 실행 시 재시도해주세요 (IP가 바뀌거나 시간이 지나면 보통 해제됩니다)."
+            )
+            break
+
         await asyncio.sleep(5)  # 카테고리 전환 간 대기
+
+    results["blocked"] = blocked
 
     # 중복 제거 및 점수 계산
     keyword_scores: dict[str, dict] = {}
 
     for period, kw_list in results.items():
+        if period not in period_weights:
+            continue
         weight = period_weights.get(period, 1)
         for kw_data in kw_list:
             kw = kw_data["keyword"]
             rank = kw_data["rank"]
             category = kw_data.get("category", "")
             rank_score = max(0, 100 - rank) * weight
+            if category in SILVER_PRIORITY_CATEGORIES:
+                rank_score *= SILVER_PRIORITY_WEIGHT
             if kw not in keyword_scores:
                 keyword_scores[kw] = {"keyword": kw, "score": 0, "periods": [], "categories": set()}
             keyword_scores[kw]["score"] += rank_score

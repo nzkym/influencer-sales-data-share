@@ -149,8 +149,8 @@ def parse_args():
     parser.add_argument(
         "--top",
         type=int,
-        default=int(os.getenv("TOP_KEYWORDS_COUNT", "50")),
-        help="분석할 상위 키워드 수 (기본값: 50)",
+        default=int(os.getenv("TOP_KEYWORDS_COUNT", "30")),
+        help="카테고리당 수집할 상위 키워드 수 (기본값: 30). 최종 분석 키워드 수는 AI 관련성 필터 결과에 따라 달라짐",
     )
     parser.add_argument(
         "--no-scrape",
@@ -300,7 +300,7 @@ def send_telegram_report(analyzed: list[dict], pdf_path, txt_path, is_critical: 
         category_warning = f"\n\n⚠️ 카테고리 수집 이슈 ({len(category_notes)}건):\n" + "\n".join(lines)
 
     message = (
-        f"✅ [건강관련 전체 트렌드 분석 완료 — 식품·생활건강·출산육아·화장품·가전]\n\n"
+        f"✅ [건강관련 전체 트렌드 분석 완료 — 건강식품 제외 전체 카테고리 스윕+AI 필터]\n\n"
         f"📅 {today}\n"
         f"🔍 분석 키워드: {total}개\n"
         f"🚀 얼리라이징: {early}개  |  성장중: {growing}개\n"
@@ -382,16 +382,16 @@ def send_email_report(pdf_path, txt_path) -> None:
 
 
 async def step1_scrape_keywords(args) -> tuple:
-    """Step 1: Scrape keywords from Naver Shopping Insight."""
+    """Step 1: 건강식품 제외 전체 카테고리 스윕 → AI 관련성 필터로 최종 키워드 선별."""
     print("\n" + "-" * 50)
-    print("[1단계] 키워드 수집")
+    print("[1단계] 키워드 수집 (전체 카테고리 스윕 + AI 관련성 필터)")
     print("-" * 50)
 
     if args.keywords:
         print(f"[1단계] 직접 지정된 키워드 사용: {args.keywords}")
         return args.keywords, {}
 
-    from scraper import get_all_period_keywords, CACHE_FILE
+    from scraper import get_all_period_keywords, CACHE_FILE, SWEEP_PERIODS
 
     use_cache = args.no_scrape
 
@@ -401,21 +401,34 @@ async def step1_scrape_keywords(args) -> tuple:
         print("[1단계] 캐시 파일이 없습니다. 스크래핑을 시작합니다...")
         use_cache = False
 
+    # args.top은 카테고리당 수집 개수일 뿐, 최종 분석 대상 개수를 미리 자르지 않는다.
+    # (예전 버전은 여기서 combined[:args.top]으로 상위 50개만 남겼는데, 그러면 여러 카테고리에
+    #  걸쳐 골고루 뜨는 인기 키워드에 밀려 특정 카테고리의 니치 기회 키워드가 통째로 유실됐음.
+    #  전체 후보를 AI 필터로 넘겨서 "관련 있는가"로만 거르도록 수정 — 2026-07-03)
     scrape_results = await get_all_period_keywords(max_rank=args.top, use_cache=use_cache)
 
-    # Get combined unique keywords
-    combined = scrape_results.get("combined", [])
-    keywords = [kw["keyword"] for kw in combined[:args.top]]
+    if scrape_results.get("blocked"):
+        print("[1단계] ⚠️ 네이버 차단 의심으로 스윕이 중간에 중단되었습니다. 수집된 데이터만으로 계속 진행합니다.")
 
-    # Also collect from individual periods
+    combined = scrape_results.get("combined", [])
+    print(f"\n[1단계] 원본 후보 키워드: {len(combined)}개 (건강식품 제외 전체 카테고리 스윕 결과)")
+
+    from keyword_filter import filter_relevant_keywords
+    filtered = filter_relevant_keywords(combined)
+    scrape_results["raw_candidate_count"] = len(combined)
+    scrape_results["filtered_count"] = len(filtered)
+
+    keywords = [kw["keyword"] for kw in filtered]
+
+    # Also collect from individual periods (combined가 비어있는 예외적인 경우의 안전장치)
     if not keywords:
         all_kws = set()
-        for period in ["1년", "3개월", "1개월"]:
+        for period in SWEEP_PERIODS:
             for kw_data in scrape_results.get(period, []):
                 all_kws.add(kw_data["keyword"])
-        keywords = list(all_kws)[:args.top]
+        keywords = list(all_kws)
 
-    print(f"\n[1단계] 총 {len(keywords)}개 고유 키워드 수집 완료")
+    print(f"\n[1단계] AI 필터 통과: {len(keywords)}개 키워드 (원본 {len(combined)}개 중)")
     if keywords:
         print(f"[1단계] 상위 10개: {', '.join(keywords[:10])}")
 
