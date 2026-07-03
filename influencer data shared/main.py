@@ -1078,27 +1078,20 @@ def _write_pharmabros_revenue_to_i(campaign):
 
 
 def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list):
-    """파마브로스정산 탭에 Drive xlsx 내용 그대로 기록."""
+    """파마브로스정산 탭에 Drive xlsx + 고정가격 기록."""
     try:
         creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
         client = gspread.authorize(creds)
         sheet_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
         ss = client.open_by_key(sheet_id)
 
-        # xlsx 헤더에서 칼럼 구성
-        if xlsx_rows:
-            cols = list(xlsx_rows[0].keys())
-        else:
-            cols = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량"]
-        HEADER = ["제목"] + cols
-        ncols = len(HEADER)
-        end_col = chr(64 + min(ncols, 26))
+        HEADER = ["제목", "주문번호", "주문일시", "주문상태", "옵션", "주문수량", "단가", "단가총합"]
+        end_col = chr(64 + len(HEADER))
 
         try:
             pb_ws = ss.worksheet("파마브로스정산")
         except gspread.WorksheetNotFound:
-            pb_ws = ss.add_worksheet(title="파마브로스정산", rows=500, cols=ncols)
-            pb_ws.update(f"A1:{end_col}1", [HEADER])
+            pb_ws = ss.add_worksheet(title="파마브로스정산", rows=500, cols=len(HEADER))
 
         existing = pb_ws.get_all_values()
         new_rows = [HEADER]
@@ -1107,11 +1100,22 @@ def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list):
                 new_rows.append(r)
 
         for row in xlsx_rows:
-            new_rows.append([title] + [row.get(c, "") for c in cols])
+            unit_price = int(row.get("단가", 0) or 0)
+            qty = int(row.get("주문수량", 0) or 0)
+            new_rows.append([
+                title,
+                row.get("주문번호", ""),
+                row.get("주문일시", ""),
+                row.get("주문상태", ""),
+                row.get("옵션", ""),
+                qty,
+                unit_price,
+                unit_price * qty,
+            ])
 
         pb_ws.clear()
         pb_ws.update(f"A1:{end_col}{len(new_rows)}", new_rows)
-        print(f"  [파마브로스정산] {title[:30]}: {len(xlsx_rows)}건 기록")
+        print(f"  [파마브로스정산] {title[:30]}: {len(xlsx_rows)}건 기록, 합계 {settlement:,}원")
 
     except Exception as e:
         print(f"  [파마브로스정산] 기재 실패: {e}")
@@ -1227,9 +1231,9 @@ def _run_pharmabros_if_needed(force: bool = False):
                     title=title,
                 )
                 if deleted:
-                    print(f"  [파마브로스] 🗑️ '{title[:30]}' 최종 파일 자동 삭제 완료: {deleted}")
+                    print(f"  [파마브로스] 📁 '{title[:30]}' 완료 폴더 이동 완료: {deleted}")
                 else:
-                    print(f"  [파마브로스] '{title[:30]}' 삭제할 파일 없음 (이미 삭제됨)")
+                    print(f"  [파마브로스] '{title[:30]}' 이동할 파일 없음 (이미 이동됨)")
             except Exception as e:
                 print(f"  [파마브로스 삭제 오류] {e}")
             continue  # 업로드 로직은 실행하지 않음
@@ -1313,6 +1317,27 @@ def main():
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
         _run_pharmabros_if_needed(force=True)
         _backfill_pharmabros_settlements()
+        return
+
+    # 완료 폴더 이동 테스트: python3 main.py --test-move 캠페인제목
+    if "--test-move" in sys.argv:
+        idx   = sys.argv.index("--test-move")
+        title = sys.argv[idx + 1] if idx + 1 < len(sys.argv) else ""
+        if not title:
+            print("사용법: python3 main.py --test-move 캠페인제목")
+            return
+        print(f"\n[테스트 모드] '{title}' 완료 폴더 이동 강제 실행\n")
+        moved = pharmabros.delete_campaign_files(
+            client_id=PHARMABROS_OAUTH_CLIENT_ID,
+            client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+            refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+            folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+            title=title,
+        )
+        if moved:
+            print(f"✅ 완료 폴더로 이동됨: {moved}")
+        else:
+            print(f"이동할 파일 없음 ('{title}_' 로 시작하는 파일이 메인 폴더에 없음)")
         return
 
     # GitHub Actions 또는 --once 플래그: 1회 실행 후 종료
