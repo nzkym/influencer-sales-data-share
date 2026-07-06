@@ -150,16 +150,17 @@ NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
 INCENTIVE_START_MONTH = "2026-06"
 
 INCENTIVE_HEADERS = [
-    "년월",
-    "인센티브 총합",
-    "쿠팡 로켓 입고금액(총단가,단위:원)",
-    "직전3개월평균대비 증감금액",
-    "직전 3개월평균",
-    "쿠팡 인센티브",
-    "올리브영 매출",
-    "올리브영인센티브 & 내용",
-    "업체 총 매출",
-    "직전3개월평균대비증감",
+    "년월",                                # A
+    "인센티브 총합",                       # B
+    # C열: 사용자 관리 메모열 — 코드가 읽지도 쓰지도 않음
+    "쿠팡 로켓 입고금액(총단가,단위:원)",  # D
+    "직전3개월평균대비 증감금액",          # E
+    "직전 3개월평균",                      # F
+    "쿠팡 인센티브",                       # G
+    "올리브영 매출",                       # H
+    "올리브영인센티브 & 내용",             # I
+    "업체 총 매출",                        # J
+    "직전3개월평균대비증감",               # K
 ]
 
 # 올리브영 월 매출 구간별 인센티브율 (월매출 하한(원), 인센티브율)
@@ -260,11 +261,12 @@ def write_incentive_sheet(
     total_sales_by_month: dict,
     updated_at: str,
 ):
-    # INCENTIVE_START_MONTH 이전 달의 인센티브 관련 컬럼(B,D,E,F,H)은 기존 입력값을 그대로 보존
-    # (C=쿠팡 입고금액, G=올리브영 매출, I=업체 총 매출은 실제 매출 데이터이므로 항상 재계산)
-    existing = ws.get_values("A3:H1000", value_render_option="UNFORMATTED_VALUE")
+    # INCENTIVE_START_MONTH 이전 달의 인센티브 관련 컬럼(B,E,F,G,I)은 기존 입력값을 그대로 보존
+    # (D=쿠팡 입고금액, H=올리브영 매출, J=업체 총 매출은 실제 매출 데이터이므로 항상 재계산)
+    # C열은 사용자 관리 메모열이므로 코드에서 읽지도 쓰지도 않음
+    existing = ws.get_values("A3:I1000", value_render_option="UNFORMATTED_VALUE")
     preserved = {
-        row[0]: (row + [""] * 8)[:8]
+        row[0]: (row + [""] * 9)[:9]
         for row in existing
         if row and row[0] < INCENTIVE_START_MONTH
     }
@@ -275,8 +277,8 @@ def write_incentive_sheet(
 
     olive_incentive = calc_olive_incentive(olive_sales_by_month, latest_month)
 
-    values = [["마지막 업데이트:", updated_at], INCENTIVE_HEADERS]
-    # 셀 클릭 시 계산방식이 보이도록 D/E/F/J는 가능하면 시트 수식으로 작성
+    values = [["마지막 업데이트:", updated_at] + [""] * 8, INCENTIVE_HEADERS]
+    # 셀 클릭 시 계산방식이 보이도록 E/F/G/K는 가능하면 시트 수식으로 작성
     formula_cells: list[tuple[str, str]] = []
 
     for k, year_month in enumerate(months_desc):
@@ -287,10 +289,11 @@ def write_incentive_sheet(
         total_sales = total_sales_by_month.get(year_month, "")
 
         if year_month < INCENTIVE_START_MONTH:
-            prow = preserved.get(year_month, [""] * 8)
+            prow = preserved.get(year_month, [""] * 9)
             total_incentive = prow[1]
-            change, prev_avg, coupang_incentive = prow[3], prow[4], prow[5]
-            olive_label = prow[7]
+            # C(index 2)는 메모열 스킵. E=index 4, F=index 5, G=index 6, I=index 8
+            change, prev_avg, coupang_incentive = prow[4], prow[5], prow[6]
+            olive_label = prow[8]
         elif year_month == latest_month:
             # 당월(데이터 취합 진행중)은 다음달에 계산
             change, prev_avg, coupang_incentive = "", "", ""
@@ -301,20 +304,20 @@ def write_incentive_sheet(
             coupang_incentive = round(change * 0.01) if change >= 5_000_000 else 0
 
             if has_prev3:
-                # D/E/F는 셀 클릭 시 계산방식이 보이도록 수식으로 작성 (B 계산용 값은 위에서 그대로 사용)
-                formula_cells.append((f"E{r}", f"=ROUND(AVERAGE(C{r + 1}:C{r + 3}),0)"))
-                formula_cells.append((f"D{r}", f"=C{r}-E{r}"))
-                formula_cells.append((f"F{r}", f"=IF(D{r}>=5000000,ROUND(D{r}*0.01,0),0)"))
+                # E/F/G는 셀 클릭 시 계산방식이 보이도록 수식으로 작성 (B 계산용 값은 위에서 그대로 사용)
+                formula_cells.append((f"F{r}", f"=ROUND(AVERAGE(D{r + 1}:D{r + 3}),0)"))
+                formula_cells.append((f"E{r}", f"=D{r}-F{r}"))
+                formula_cells.append((f"G{r}", f"=IF(E{r}>=5000000,ROUND(E{r}*0.01,0),0)"))
                 change, prev_avg = "", ""
 
             olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
             total_incentive = coupang_incentive + olive_total
 
-        # J(직전3개월평균대비증감): 당월은 비워두고 다음달 실행 시 계산
+        # K(직전3개월평균대비증감): 당월은 비워두고 다음달 실행 시 계산
         if year_month == latest_month:
             total_change = ""
         elif has_prev3:
-            formula_cells.append((f"J{r}", f"=I{r}-ROUND(AVERAGE(I{r + 1}:I{r + 3}),0)"))
+            formula_cells.append((f"K{r}", f"=J{r}-ROUND(AVERAGE(J{r + 1}:J{r + 3}),0)"))
             total_change = ""
         elif total_sales == "":
             total_change = ""
@@ -327,14 +330,18 @@ def write_incentive_sheet(
             coupang_incentive, olive_sales, olive_label, total_sales, total_change,
         ])
 
-    ws.batch_clear(["A1:J1000"])
-    ws.update(range_name="A1", values=values, value_input_option="RAW")
+    # C열(사용자 메모)을 건드리지 않도록 A:B와 D:K를 분리해서 clear/update
+    # AB열: 이전 수식 테스트 잔여 데이터 정리
+    ws.batch_clear(["A1:B1000", "D1:K1000", "AB1:AB10"])
+    ws.update(range_name="A1", values=[[r[0], r[1]] for r in values], value_input_option="RAW")
+    ws.update(range_name="D1", values=[r[2:] for r in values], value_input_option="RAW")
     if formula_cells:
         ws.batch_update(
             [{"range": cell, "values": [[formula]]} for cell, formula in formula_cells],
             value_input_option="USER_ENTERED",
         )
-    ws.format(f"B3:J{2 + len(months_desc)}", NUMBER_FORMAT)
+    ws.format(f"B3:B{2 + len(months_desc)}", NUMBER_FORMAT)
+    ws.format(f"D3:K{2 + len(months_desc)}", NUMBER_FORMAT)
 
 
 def main():
