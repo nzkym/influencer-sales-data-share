@@ -331,8 +331,7 @@ def write_incentive_sheet(
         ])
 
     # C열(사용자 메모)을 건드리지 않도록 A:B와 D:K를 분리해서 clear/update
-    # AB열: 이전 수식 테스트 잔여 데이터 정리
-    ws.batch_clear(["A1:B1000", "D1:K1000", "AB1:AB10"])
+    ws.batch_clear(["A1:B1000", "D1:K1000"])
     ws.update(range_name="A1", values=[[r[0], r[1]] for r in values], value_input_option="RAW")
     ws.update(range_name="D1", values=[r[2:] for r in values], value_input_option="RAW")
     if formula_cells:
