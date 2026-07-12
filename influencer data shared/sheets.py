@@ -485,8 +485,12 @@ def write_summary_tab(
         "주문수", "제품수", "상태", "진행링크", "업데이트",
         "매출", "공구수수료(vat포함)", "이익", "이익률", "매칭원가제품명",
     ]
-    # 행2: 합계행 (L=매출합, N=이익합, O=N2/L2)
-    summary_row = ["", "합계", "", "", "", "", "", "", "", "", "",
+    # 행2: 합계행 (L=매출합, N=이익합, O=N2/L2) — C2 기존 내용 보존
+    try:
+        c2_label = ws.cell(2, 3).value or ""
+    except Exception:
+        c2_label = ""
+    summary_row = ["", "합계", c2_label, "", "", "", "", "", "", "", "",
                    "=SUM(L3:L500)", "", "=SUM(N3:N500)", '=IFERROR(N2/L2,"")', ""]
     values = [header, summary_row]
 
