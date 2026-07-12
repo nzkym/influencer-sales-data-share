@@ -1312,6 +1312,13 @@ def _run_pharmabros_if_needed(force: bool = False):
 
 
 def main():
+    # 이익 2/3 조정: 캠페인 실적 탭 N, O열 기존값을 2/3 숫자로 즉시 변환
+    if "--fix-profit" in sys.argv:
+        print("\n[이익 2/3 조정] 캠페인 실적 탭 N, O열 변환 중...\n")
+        sheets.fix_profit_columns_twothird(MASTER_SHEET_URL)
+        print("완료")
+        return
+
     # 파마브로스 테스트 모드: 시간 체크 없이 파마브로스만 즉시 실행
     if "--test-pharmabros" in sys.argv:
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")

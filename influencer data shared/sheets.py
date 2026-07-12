@@ -507,53 +507,51 @@ def write_summary_tab(
         # ── P열 매칭원가제품명 ────────────────────
         matched_name = extras.get("matched_name", "")
 
-        # ── N열 이익 수식 ─────────────────────────
+        # ── N열 이익 (숫자, 2/3 조정) ─────────────
         pp                = extras.get("profit_params", {})
         option_cost_total = extras.get("option_cost_total", 0)
         option_delivery   = extras.get("option_delivery", 0)
         option_ch_comm    = extras.get("option_ch_comm", 0.0)
+        g_val = int(row.get("total_orders", 0) or 0)
+        h_val = int(row.get("total_products", 0) or 0)
 
-        n_formula = ""
+        n_value = ""
         if isinstance(revenue, int) and revenue > 0 and commission != "":
             if option_cost_total > 0:
-                # 멀티제품: 옵션별 원가×제품수 합산값 하드코딩
                 del_v = option_delivery or 3000
-                ch_v  = option_ch_comm
-                n_formula = (
-                    f"=L{row_sheet}"
-                    f"-{option_cost_total}"
-                    f"-(L{row_sheet}*(M{row_sheet}/100))"
-                    f"-(L{row_sheet}*{ch_v})"
-                    f"-({del_v}*G{row_sheet})"
-                )
+                ch_v  = float(option_ch_comm)
+                raw_profit = (revenue
+                              - option_cost_total
+                              - revenue * float(commission) / 100
+                              - revenue * ch_v
+                              - del_v * g_val)
+                n_value = round(raw_profit * 2 / 3)
             elif pp:
                 cost     = int(pp.get("cost", 0) or 0)
                 ch_comm  = float(pp.get("channel_comm", 0) or 0)
                 delivery = int(pp.get("delivery", 3000) or 3000)
                 if cost > 0:
-                    n_formula = (
-                        f"=L{row_sheet}"
-                        f"-({cost}*H{row_sheet})"
-                        f"-(L{row_sheet}*(M{row_sheet}/100))"
-                        f"-(L{row_sheet}*{ch_comm})"
-                        f"-({delivery}*G{row_sheet})"
-                    )
+                    raw_profit = (revenue
+                                  - cost * h_val
+                                  - revenue * float(commission) / 100
+                                  - revenue * ch_comm
+                                  - delivery * g_val)
+                    n_value = round(raw_profit * 2 / 3)
                 else:
-                    n_formula = "원가 0원(참고사항 확인)"
+                    n_value = "원가 0원(참고사항 확인)"
             else:
-                n_formula = "원가제품 미매칭"
+                n_value = "원가제품 미매칭"
         elif isinstance(revenue, int) and revenue > 0:
-            n_formula = "수수료 누락"
+            n_value = "수수료 누락"
         elif revenue == "" and commission != "":
-            n_formula = "매출 누락"
+            n_value = "매출 누락"
         elif revenue == "":
-            n_formula = "매출·수수료 누락"
+            n_value = "매출·수수료 누락"
 
-        # ── O열 이익률 수식 ───────────────────────
-        o_formula = (
-            f"=IFERROR(N{row_sheet}/L{row_sheet},\"\")"
-            if n_formula and n_formula.startswith("=") else ""
-        )
+        # ── O열 이익률 (숫자) ─────────────────────
+        o_value = ""
+        if isinstance(n_value, int) and isinstance(revenue, int) and revenue > 0:
+            o_value = round(n_value / revenue, 6)
 
         values.append([
             i,
@@ -569,8 +567,8 @@ def write_summary_tab(
             row["updated_at"],
             revenue if revenue != "" else "",
             commission if commission != "" else "",
-            n_formula,
-            o_formula,
+            n_value,
+            o_value,
             matched_name,
         ])
 
@@ -654,6 +652,38 @@ def write_summary_tab(
 
     if R:
         spreadsheet.batch_update(requests_body)
+
+
+def fix_profit_columns_twothird(spreadsheet_url: str):
+    """캠페인 실적 탭 N, O열 기존 값을 2/3 숫자로 즉시 변환 (1회성 작업)."""
+    client = _get_client()
+    sheet_id = _extract_sheet_id(spreadsheet_url)
+    spreadsheet = client.open_by_key(sheet_id)
+    ws = spreadsheet.worksheet("캠페인 실적(자사확인용)")
+
+    current = ws.get("N2:O33", value_render_option="UNFORMATTED_VALUE")
+
+    new_values = []
+    changed = 0
+    for row_data in current:
+        n_raw = row_data[0] if len(row_data) > 0 else ""
+        o_raw = row_data[1] if len(row_data) > 1 else ""
+
+        if isinstance(n_raw, (int, float)) and n_raw != 0:
+            new_n = round(n_raw * 2 / 3)
+            changed += 1
+        else:
+            new_n = n_raw if n_raw != "" else ""
+
+        if isinstance(o_raw, (int, float)) and o_raw != 0:
+            new_o = round(o_raw * 2 / 3, 6)
+        else:
+            new_o = o_raw if o_raw != "" else ""
+
+        new_values.append([new_n, new_o])
+
+    ws.update("N2:O33", new_values, value_input_option="RAW")
+    print(f"  [이익 2/3 조정] {changed}행 변경 완료 (총 {len(new_values)}행 처리)")
 
 
 def _aggregate_hourly(sales_data: list) -> tuple:
