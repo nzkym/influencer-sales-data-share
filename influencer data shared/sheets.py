@@ -431,7 +431,7 @@ def read_summary_tab(spreadsheet_url: str) -> dict:
         result = {}
         for row in records:
             title = str(row.get("제목", "")).strip()
-            if title:
+            if title and title != "합계":
                 raw_rev = str(row.get("매출", "")).replace(",", "").strip()
                 cached_revenue = int(raw_rev) if raw_rev.lstrip("-").isdigit() else ""
                 raw_comm = str(row.get("공구수수료(vat포함)", "")).replace(",", "").strip()
@@ -485,10 +485,13 @@ def write_summary_tab(
         "주문수", "제품수", "상태", "진행링크", "업데이트",
         "매출", "공구수수료(vat포함)", "이익", "이익률", "매칭원가제품명",
     ]
-    values = [header]
+    # 행2: 합계행 (L=매출합, N=이익합, O=N2/L2)
+    summary_row = ["", "합계", "", "", "", "", "", "", "", "", "",
+                   "=SUM(L3:L500)", "", "=SUM(N3:N500)", '=IFERROR(N2/L2,"")', ""]
+    values = [header, summary_row]
 
     for i, row in enumerate(summary_rows, 1):
-        row_sheet = i + 1  # 시트 행 번호 (헤더=1, 데이터 시작=2)
+        row_sheet = i + 2  # 시트 행 번호 (헤더=1, 합계=2, 데이터 시작=3)
         extras    = (row_extras or {}).get(row["title"], {})
 
         # ── L열 매출 ──────────────────────────────
@@ -601,9 +604,21 @@ def write_summary_tab(
         "fields": "userEnteredFormat(backgroundColor,textFormat,horizontalAlignment)",
     }})
 
-    # 데이터 행 교대 색상 (A-K)
+    # 합계행(2행) 서식: 굵게 + 연한 노란 배경
+    COLOR_SUMMARY_BG = {"red": 1.0, "green": 0.98, "blue": 0.80}
+    R.append({"repeatCell": {
+        "range": cell_range(1, 0, 2, len(header)),
+        "cell": {"userEnteredFormat": {
+            "backgroundColor": COLOR_SUMMARY_BG,
+            "textFormat": {"bold": True, "foregroundColor": BLACK},
+        }},
+        "fields": "userEnteredFormat(backgroundColor,textFormat)",
+    }})
+
+    # 데이터 행 교대 색상 (A-K), row 3부터
+    COLOR_LMNO_BG = {"red": 0.90, "green": 0.97, "blue": 0.90}
     for i in range(len(summary_rows)):
-        row_idx = i + 1
+        row_idx = i + 2  # 합계행이 row_idx=1이므로 데이터는 2부터 (0-indexed)
         bg = COLOR_ODD_BG if i % 2 == 0 else COLOR_EVEN_BG
         R.append({"repeatCell": {
             "range": cell_range(row_idx, 0, row_idx + 1, 11),  # A-K
@@ -611,7 +626,6 @@ def write_summary_tab(
             "fields": "userEnteredFormat(backgroundColor)",
         }})
         # L-P: 연한 초록 배경으로 구분
-        COLOR_LMNO_BG = {"red": 0.90, "green": 0.97, "blue": 0.90}
         R.append({"repeatCell": {
             "range": cell_range(row_idx, 11, row_idx + 1, 16),  # L-P
             "cell": {"userEnteredFormat": {
@@ -621,19 +635,19 @@ def write_summary_tab(
             "fields": "userEnteredFormat(backgroundColor,textFormat)",
         }})
 
-    # L열(매출), N열(이익) 숫자 서식 (#,##0)
+    # L열(매출), N열(이익) 숫자 서식 (#,##0) — 합계행(2) 포함
     if len(summary_rows) > 0:
         for col_idx in [11, 13]:  # L=11, N=13
             R.append({"repeatCell": {
-                "range": cell_range(1, col_idx, len(summary_rows) + 1, col_idx + 1),
+                "range": cell_range(1, col_idx, len(summary_rows) + 2, col_idx + 1),
                 "cell": {"userEnteredFormat": {
                     "numberFormat": {"type": "NUMBER", "pattern": "#,##0"},
                 }},
                 "fields": "userEnteredFormat(numberFormat)",
             }})
-        # O열(이익률) 백분율 서식
+        # O열(이익률) 백분율 서식 — 합계행(2) 포함
         R.append({"repeatCell": {
-            "range": cell_range(1, 14, len(summary_rows) + 1, 15),
+            "range": cell_range(1, 14, len(summary_rows) + 2, 15),
             "cell": {"userEnteredFormat": {
                 "numberFormat": {"type": "PERCENT", "pattern": "0.00%"},
             }},

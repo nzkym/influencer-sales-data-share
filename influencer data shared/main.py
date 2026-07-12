@@ -953,7 +953,7 @@ def run_once():
                 f"🕐 발생시각: {datetime.now().strftime('%Y-%m-%d %H:%M')}"
             )
 
-    # update_summary_tab()  # 임시 중단 — 수동 편집 중
+    update_summary_tab()
 
     # ── 파마브로스 파일공유 ───────────────────────────────
     _run_pharmabros_if_needed()
