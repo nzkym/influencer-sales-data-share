@@ -708,16 +708,14 @@ def update_summary_tab():
     all_rows = new_rows + kept_rows
     all_rows.sort(key=lambda r: str(r.get("date_to", "")), reverse=True)
 
-    # ── (product_no, date_from, date_to) 기준 중복 제거 ──────────
-    # 같은 캠페인이 sheet1/인센티브 시트에서 제목이 달리 올라와 중복 기재되는 방지
+    # ── (product_no, date_from) 기준 중복 제거 ───────────────────
+    # 같은 캠페인이 sheet1/인센티브 시트에서 제목·종료일이 달라도 하나만 유지
     _pno_seen: dict = {}
     _deduped: list = []
     for r in all_rows:
         _m = re.search(r"/products/(\d+)", str(r.get("url", "")))
         _pno = _m.group(1) if _m else ""
-        _pkey = (_pno, str(r.get("date_from", "")), str(r.get("date_to", "")))
-        if not _pno:
-            _pkey = ("__title__", r.get("title", ""), "")
+        _pkey = (_pno, str(r.get("date_from", ""))) if _pno else ("__title__", r.get("title", ""))
         if _pkey not in _pno_seen:
             _pno_seen[_pkey] = True
             _deduped.append(r)
