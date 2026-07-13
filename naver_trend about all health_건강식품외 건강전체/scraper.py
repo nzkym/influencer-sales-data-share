@@ -102,6 +102,16 @@ SILVER_PRIORITY_CATEGORIES = {
 }
 SILVER_PRIORITY_WEIGHT = 1.5
 
+# 실버산업 카테고리는 일반 카테고리보다 훨씬 깊게(순위 하위까지) 훑는다.
+# 1차 스윕 결과(2026-07-04)에서 실버 관련 키워드가 노안돋보기안경 정도만 나오고 기대보다
+# 적게 잡혀서, 얕은 순위 컷(카테고리당 30개)이 병목이라고 판단해 깊이를 늘림.
+# SILVER_PRIORITY_CATEGORIES(6개, 가중치 대상)보다 넓게 — 생활/건강 대분류 전체(34개, 실버 관련
+# 용품 대부분이 여기 있음) + 노안돋보기안경이 실제로 나온 패션잡화-안경류를 深스캔 대상에 포함.
+SILVER_DEEP_SCAN_RANK = 100
+DEEP_SCAN_CATEGORIES = {
+    f"생활/건강-{sub}" for sub in SWEEP_CATEGORY_MAP["생활/건강"]
+} | {"패션잡화-선글라스/안경테"}
+
 # 카테고리당 수집 최대 키워드 수
 MAX_RANK_PER_CATEGORY = 500
 
@@ -572,6 +582,8 @@ async def get_all_period_keywords(
     total = len(SWEEP_CATEGORIES)
     for idx, (main_cat, sub_cat, display_name) in enumerate(SWEEP_CATEGORIES, start=1):
         print(f"\n[스크래퍼] ===== [{idx}/{total}] 카테고리: {display_name} =====")
+        category_max_rank = max(max_rank, SILVER_DEEP_SCAN_RANK) if display_name in DEEP_SCAN_CATEGORIES else max_rank
+
         for period in SWEEP_PERIODS:
             try:
                 keywords, note = await get_top_keywords(
@@ -579,7 +591,7 @@ async def get_all_period_keywords(
                     main_cat=main_cat,
                     sub_cat=sub_cat,
                     sub_sub_cat=None,
-                    max_rank=max_rank,
+                    max_rank=category_max_rank,
                 )
 
                 if note == "BLOCKED":
