@@ -1019,10 +1019,47 @@ def _match_option_price(opt_name: str, prices: dict) -> int:
     return 0
 
 
+def _auto_save_pharmabros_prices(campaign):
+    """주문 API에서 옵션별 단가를 자동 추출해 JSON 저장 (가격 파일 없을 때만)."""
+    price_file = PHARMABROS_PRICES_DIR / f"{campaign['product_no']}.json"
+    if price_file.exists():
+        return
+    try:
+        orders = naver_api.get_pharmabros_orders(
+            campaign["api_id"], campaign["api_secret"],
+            campaign["product_no"],
+            campaign["date_from"], campaign["date_to"],
+        )
+    except Exception as e:
+        print(f"  [자동가격저장] 주문 조회 실패: {e}")
+        return
+
+    from collections import Counter
+    opt_prices: dict = {}
+    for o in orders:
+        status = str(o.get("주문상태", ""))
+        if any(k in status for k in ("취소", "반품")) or any(k in status.upper() for k in ("CANCEL", "RETURN")):
+            continue
+        opt = str(o.get("옵션", "")).strip()
+        amt = int(o.get("단가", 0) or 0)   # naver_api: totalPaymentAmount // qty
+        if opt and amt > 0:
+            opt_prices.setdefault(opt, []).append(amt)
+
+    if not opt_prices:
+        print(f"  [자동가격저장] {campaign['title'][:20]}: 유효 주문 없음")
+        return
+
+    prices = {opt: Counter(vals).most_common(1)[0][0] for opt, vals in opt_prices.items()}
+    price_file.parent.mkdir(exist_ok=True)
+    price_file.write_text(json.dumps(prices, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"  [자동가격저장] {campaign['title'][:20]}: {prices}")
+
+
 def _calc_pharmabros_settlement(campaign) -> tuple:
     """Drive xlsx에서 주문 데이터를 읽어 정산금액 계산.
     고정 옵션가격이 있으면 적용. 반환: (총액, xlsx행리스트)
     """
+    _auto_save_pharmabros_prices(campaign)   # 가격 파일 없으면 자동 생성
     rows = pharmabros.read_xlsx_rows_from_drive(
         client_id=PHARMABROS_OAUTH_CLIENT_ID,
         client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
@@ -1282,6 +1319,9 @@ def _run_pharmabros_if_needed(force: bool = False):
                 oauth_refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
                 drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
             )
+
+            # ── 캠페인 중간 시점 이후: 옵션가격 자동 저장 ────────
+            _save_pharmabros_option_prices(campaign)
 
             # ── 최종 업로드 시: I열 매출 + 정산탭 내역 기재
             if is_final:
