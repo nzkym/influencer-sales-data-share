@@ -1520,6 +1520,57 @@ def main():
         print("완료")
         return
 
+    # 파마브로스 정산서 PDF 즉시 업로드: python3 main.py --upload-pdf
+    if "--upload-pdf" in sys.argv:
+        print("\n[파마브로스 정산서 PDF] 종료된 캠페인 정산서 Drive 업로드 중...\n")
+        try:
+            creds   = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+            client  = gspread.authorize(creds)
+            sh_id   = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+            ws      = client.open_by_key(sh_id).sheet1
+            rows    = ws.get_all_records()
+            KST     = timezone(timedelta(hours=9))
+            today   = datetime.now(KST).date()
+            uploaded = 0
+            for row in rows:
+                k_val = re.sub(r"\s+", "", str(row.get("파마브로스파일공유여부", "")))
+                if k_val != "파마브로스파일공유":
+                    continue
+                title     = str(row.get("제목", "")).strip()
+                end_str   = str(row.get("종료일자", "")).strip()
+                start_str = str(row.get("시작일자", "")).strip()
+                url       = str(row.get("상품링크", "")).strip()
+                store     = str(row.get("스토어", "")).strip().lower()
+                if not all([title, end_str, start_str, url, store]):
+                    continue
+                if store not in STORE_CREDENTIALS:
+                    continue
+                try:
+                    end_date = parse_date(end_str)
+                except ValueError:
+                    continue
+                if end_date >= today:
+                    continue
+                api_id, api_secret = STORE_CREDENTIALS[store]
+                try:
+                    product_no = extract_product_no(url)
+                except ValueError:
+                    continue
+                campaign = {
+                    "title": title, "product_no": product_no, "url": url,
+                    "date_from": parse_date(start_str).strftime("%Y-%m-%d"),
+                    "date_to": end_date.strftime("%Y-%m-%d"),
+                    "api_id": api_id, "api_secret": api_secret, "store": store,
+                }
+                print(f"  처리 중: {title[:30]}")
+                total_payment, _ = _calc_pharmabros_settlement(campaign)
+                _upload_pharmabros_settlement_pdf(campaign, total_payment)
+                uploaded += 1
+        except Exception as e:
+            print(f"  오류: {e}")
+        print(f"\n완료: {uploaded}개 업로드")
+        return
+
     # 파마브로스 테스트 모드: 시간 체크 없이 파마브로스만 즉시 실행
     if "--test-pharmabros" in sys.argv:
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
