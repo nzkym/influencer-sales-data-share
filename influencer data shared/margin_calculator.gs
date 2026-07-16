@@ -86,7 +86,7 @@ function generatePharmabrosSettlement() {
     return;
   }
 
-  // 파마브로스정산 탭에서 Drive xlsx 기준 매출합계 계산 (취소 제외)
+  // 파마브로스정산 탭 — 고정 옵션가 기준 합계 (취소 제외)
   var totalPayment = 0;
   try {
     var pbTab = SpreadsheetApp.getActiveSpreadsheet().getSheetByName('파마브로스정산');
@@ -100,6 +100,12 @@ function generatePharmabrosSettlement() {
       }
     }
   } catch(e) {}
+
+  // 파마브로스정산 탭 비어있으면 I열 폴백
+  if (!totalPayment) {
+    var iVal = Number(String(vals[8]).replace(/[^0-9.]/g, '')) || 0;
+    if (iVal) totalPayment = iVal;
+  }
 
   if (!totalPayment) {
     ui.alert('파마브로스 정산 데이터가 없습니다.\n서버에서 자동 계산 후 이용 가능합니다.');
@@ -153,16 +159,16 @@ function generatePharmabrosSettlement() {
     + '<tr><td>인플루언서</td><td>' + title + '</td></tr>'
     + (productName ? '<tr><td>제품명</td><td>' + productName + '</td></tr>' : '')
     + '<tr><td>진행기간</td><td>' + dateFrom + ' ~ ' + dateTo + '</td></tr>'
-    + '<tr><td>총 결제금액</td><td>' + totalPayment.toLocaleString('ko-KR') + '원</td></tr>'
+    + '<tr><td>합계금액</td><td>' + totalPayment.toLocaleString('ko-KR') + '원</td></tr>'
     + '<tr><td>수수료</td><td>' + (commRate * 100).toFixed(1) + '%</td></tr>'
-    + '<tr class="total-row"><td>정산기준금액</td><td>' + settlement.toLocaleString('ko-KR') + '원</td></tr>'
+    + '<tr class="total-row"><td>정산금액</td><td>' + settlement.toLocaleString('ko-KR') + '원</td></tr>'
     + '</table>'
     + '<div class="company"><div class="company-title">정산 업체 정보</div>'
     + '<div class="company-body">업체명&nbsp;&nbsp;&nbsp;주식회사 정담건강<br>'
     + '사업자번호&nbsp;&nbsp;&nbsp;391-86-00889<br>'
     + '주소&nbsp;&nbsp;&nbsp;경기도 시흥시 서울대학로278번길61, 431-2호'
     + '</div></div>'
-    + '<p class="note">*세금관련부분은 협의된 내용으로 처리가 됩어 실제 입금금액은 위 정산기준금액과 일부 상이할수도있습니다. (ex&gt;부가세여부, 프리랜서공제&lt;3.3%공제된 금액입금&gt; 등)</p>'
+    + '<p class="note">*세금관련부분은 협의된 내용으로 처리가 됩어 실제 입금금액은 위 정산금액과 일부 상이할수도있습니다. (ex&gt;부가세여부, 프리랜서공제&lt;3.3%공제된 금액입금&gt; 등)</p>'
     + '</div></body></html>';
 
   SpreadsheetApp.getUi().showModalDialog(
