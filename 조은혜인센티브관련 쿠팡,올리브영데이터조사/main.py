@@ -57,7 +57,8 @@ def send_telegram(text: str) -> None:
 
 def get_client() -> gspread.Client:
     creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
-    return gspread.authorize(creds)
+    # 429 (분당 요청 초과) 시 자동 대기 후 재시도
+    return gspread.Client(auth=creds, http_client=gspread.BackOffHTTPClient)
 
 
 def get_worksheet(client: gspread.Client, sheet_id: str, gid: int):
