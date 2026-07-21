@@ -1080,23 +1080,19 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
 
     total = 0
     for r in rows:
-        # 고정가격 적용
-        if fixed_prices:
-            opt = str(r.get("옵션", ""))
-            fixed = _match_option_price(opt, fixed_prices)
-            if fixed:
-                qty = int(r.get("주문수량", 0) or 0)
-                r["단가"] = fixed
-                r["결제금액"] = fixed * qty
-
         status = str(r.get("주문상태", ""))
         if "취소" in status or "반품" in status or "CANCEL" in status.upper() or "RETURN" in status.upper():
             continue
-        amt = r.get("결제금액", 0)
-        if amt:
-            total += int(amt)
-        else:
-            total += int(r.get("단가", 0) or 0) * int(r.get("주문수량", 0) or 0)
+
+        qty = int(r.get("주문수량", 0) or 0)
+        # xlsx에 단가 컬럼이 있으면 그걸 우선 사용, 없으면 JSON 고정가격 적용
+        unit_price = int(r.get("단가", 0) or 0)
+        if not unit_price and fixed_prices:
+            unit_price = _match_option_price(str(r.get("옵션", "")), fixed_prices)
+            if unit_price:
+                r["단가"] = unit_price
+
+        total += unit_price * qty
 
     print(f"  [파마브로스정산] {campaign['title'][:30]}: {len(rows)}건, 합계 {total:,}원")
     return total, rows

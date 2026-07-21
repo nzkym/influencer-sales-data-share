@@ -165,7 +165,7 @@ def create_excel(
     ws.row_dimensions[3].height = 16
 
     # ── 4행: 헤더 ─────────────────────────────────────────
-    headers = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량"]
+    headers = ["주문번호", "주문일시", "주문상태", "옵션", "주문수량", "단가"]
     for col, h in enumerate(headers, 1):
         c = ws.cell(row=4, column=col, value=h)
         c.font      = WHITE_FONT
@@ -185,8 +185,9 @@ def create_excel(
             order.get("주문상태", ""),
             order.get("옵션", ""),
             order.get("주문수량", 0),
+            order.get("단가", ""),
         ]
-        aligns = [CENTER, CENTER, CENTER, LEFT, CENTER]
+        aligns = [CENTER, CENTER, CENTER, LEFT, CENTER, CENTER]
         for col, (val, aln) in enumerate(zip(values, aligns), 1):
             c = ws.cell(row=row, column=col, value=val)
             c.font      = BODY_FONT
@@ -219,6 +220,7 @@ def create_excel(
     _col_width(ws, 3, 14)   # 주문상태
     _col_width(ws, 4, 36)   # 옵션
     _col_width(ws, 5, 10)   # 주문수량
+    _col_width(ws, 6, 12)   # 단가
 
     # ── 틀 고정 (4행 헤더 이후) ──────────────────────────
     ws.freeze_panes = "A5"
