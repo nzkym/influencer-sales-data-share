@@ -418,6 +418,11 @@ async def step1_scrape_keywords(args) -> tuple:
     scrape_results["raw_candidate_count"] = len(combined)
     scrape_results["filtered_count"] = len(filtered)
 
+    silver_keywords = [kw["keyword"] for kw in filtered if kw.get("is_silver")]
+    scrape_results["silver_keywords"] = silver_keywords
+    if filtered:
+        print(f"[1단계] 실버산업 관련: {len(silver_keywords)}/{len(filtered)}개 ({len(silver_keywords)/len(filtered)*100:.0f}%)")
+
     keywords = [kw["keyword"] for kw in filtered]
 
     # Also collect from individual periods (combined가 비어있는 예외적인 경우의 안전장치)
@@ -1071,6 +1076,11 @@ async def main():
     # Merge search volumes into analysis results
     if volumes:
         merge_volumes_into_analyzed(analyzed, volumes)
+
+    # 실버산업 태그 병합 (1단계 AI 필터가 판정한 결과를 분석 결과에 반영)
+    silver_keyword_set = set(scrape_results.get("silver_keywords", [])) if scrape_results else set()
+    for kw in analyzed:
+        kw["is_silver"] = kw["keyword"] in silver_keyword_set
 
     if not analyzed:
         print("\n[오류] 트렌드 분석 결과가 없습니다.")

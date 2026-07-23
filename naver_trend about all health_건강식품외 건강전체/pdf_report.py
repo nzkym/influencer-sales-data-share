@@ -82,6 +82,7 @@ C_ACCENT    = colors.HexColor("#E53935")   # red      — early_rising
 C_ORANGE    = colors.HexColor("#FB8C00")   # orange   — growing
 C_GREEN     = colors.HexColor("#43A047")   # green    — stable
 C_GRAY      = colors.HexColor("#9E9E9E")   # gray     — declining
+C_PURPLE    = colors.HexColor("#6A1B9A")   # purple   — 실버산업 전용 섹션
 C_LIGHTBLUE = colors.HexColor("#E3F2FD")   # light bg — table header
 C_LIGHTYELLOW = colors.HexColor("#FFFDE7") # light bg — warning section
 C_WHITE     = colors.white
@@ -242,6 +243,62 @@ def _keyword_table(
 
     t.setStyle(TableStyle(ts_cmds))
     return t
+
+
+def _silver_section(silver_kws: list[dict], total_count: int) -> list:
+    """
+    실버산업/고령친화용품 전용 테이블. 트렌드 단계와 무관하게 항상 노출한다 —
+    현재 최우선 사업 확장 방향이라 다른 섹션(얼리라이징 등)에 안 걸리는 항목도 여기서 다 보여줌
+    (2026-07-04: "실버산업 키워드가 거의 안 보인다"는 피드백 반영).
+    """
+    from keyword_volume import format_volume
+
+    pct = (len(silver_kws) / total_count * 100) if total_count else 0
+    story = [_p(f"실버산업/고령친화용품 집중 분석 ({len(silver_kws)}개, 전체의 {pct:.0f}%)", S_H1)]
+
+    if not silver_kws:
+        story.append(_p("이번 수집에서는 실버산업 관련 키워드가 확보되지 않았습니다.", S_SMALL))
+        story.append(Spacer(1, 4*mm))
+        return story
+
+    story.append(_p(
+        "의료용품 · 재활운동 · 안마 · 건강측정 · 당뇨관리 · 노안 등 고령친화용품 — 현재 최우선 확장 검토 대상",
+        S_SMALL
+    ))
+    story.append(Spacer(1, 2*mm))
+
+    has_volume = any(kw.get("monthly_total_search", 0) > 0 for kw in silver_kws)
+
+    if has_volume:
+        columns = [
+            ("순위",        lambda k: str(silver_kws.index(k)+1),                      TC_RANK,  8),
+            ("키워드",      lambda k: k["keyword"],                                    TC_KW,   28),
+            ("기회점수",    lambda k: f"{k['opportunity_score']:.1f}",                 TC_NUM,  15),
+            ("성장률",      lambda k: f"{k['recent_growth_rate']:+.1f}%",              TC_NUM,  17),
+            ("단계",        lambda k: _phase_label(k["trend_phase"]),                  TC_NUM,  17),
+            ("얼리무버",    lambda k: f"{k['early_mover_score']:.1f}",                 TC_NUM,  17),
+            ("PC검색량",    lambda k: format_volume(k.get("monthly_pc_search", 0)),    TC_NUM,  26),
+            ("모바일검색량",lambda k: format_volume(k.get("monthly_mobile_search", 0)),TC_NUM,  26),
+        ]  # 8+28+15+17+17+17+26+26 = 154mm
+    else:
+        columns = [
+            ("순위",     lambda k: str(silver_kws.index(k)+1),          TC_RANK, 10),
+            ("키워드",   lambda k: k["keyword"],                         TC_KW,   38),
+            ("기회점수", lambda k: f"{k['opportunity_score']:.1f}",      TC_NUM,  20),
+            ("성장률",   lambda k: f"{k['recent_growth_rate']:+.1f}%",   TC_NUM,  20),
+            ("단계",     lambda k: _phase_label(k["trend_phase"]),       TC_NUM,  20),
+            ("얼리무버", lambda k: f"{k['early_mover_score']:.1f}",      TC_NUM,  20),
+        ]  # 10+38+20+20+20+20 = 128mm
+
+    t = _keyword_table(
+        silver_kws, columns,
+        header_bg=C_PURPLE,
+        alt_row_color=colors.HexColor("#F3E5F5"),
+        grid_color="#E1BEE7",
+    )
+    story.append(t)
+    story.append(Spacer(1, 5*mm))
+    return story
 
 
 def _early_rising_section(early_kws: list[dict]) -> list:
@@ -897,9 +954,11 @@ def generate_pdf(
     story.append(Spacer(1, 4*mm))
 
     # Key sections
+    silver_kws       = [k for k in analyzed_keywords if k.get("is_silver")]
     early_rising_kws = [k for k in analyzed_keywords if k["trend_phase"] == "early_rising"]
     growing_kws      = [k for k in analyzed_keywords if k["trend_phase"] == "growing"]
 
+    story += _silver_section(silver_kws, len(analyzed_keywords))
     story += _early_rising_section(early_rising_kws)
     story += _growing_section(growing_kws)
     story += _full_ranking_section(analyzed_keywords)

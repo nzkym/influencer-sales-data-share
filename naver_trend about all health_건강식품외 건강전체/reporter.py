@@ -80,12 +80,16 @@ def _build_prompt(analyzed_keywords: list[dict], raw_trends: dict) -> str:
         if k["recent_growth_rate"] > 100 and k["consistency_score"] < 40
     ][:5]
 
+    # 실버산업 키워드 — 현재 최우선 사업 확장 방향이라 별도로 항상 포함 (다른 섹션에 없어도)
+    silver_kws_all = [k for k in analyzed_keywords if k.get("is_silver")]
+    silver_kws = silver_kws_all[:30]  # 프롬프트 크기 제한 — 개수는 silver_kws_all로 별도 보고
+
     # Top opportunity keywords (to fill up context if early_rising is few)
-    already_included = {k["keyword"] for k in early_rising + steady_growers + growing + flash_candidates}
+    already_included = {k["keyword"] for k in early_rising + steady_growers + growing + flash_candidates + silver_kws}
     top_remaining = [k for k in analyzed_keywords if k["keyword"] not in already_included][:10]
 
     # Format keyword data
-    priority_keywords = early_rising + steady_growers + growing + top_remaining
+    priority_keywords = silver_kws + early_rising + steady_growers + growing + top_remaining
     keyword_data_text = "\n\n".join([
         _format_trend_summary(kw["keyword"], kw, raw_trends)
         for kw in priority_keywords
@@ -106,6 +110,11 @@ def _build_prompt(analyzed_keywords: list[dict], raw_trends: dict) -> str:
         for k in flash_candidates
     ]) or "해당 없음"
 
+    silver_text = "\n".join([
+        f"- {k['keyword']}: 기회점수={k['opportunity_score']:.0f}, 성장률={k['recent_growth_rate']:+.0f}%, 단계={k['trend_phase']}"
+        for k in silver_kws
+    ]) or "해당 없음 (이번 수집에서 실버산업 관련 키워드가 확보되지 않음)"
+
     # Phase distribution
     phases = [k["trend_phase"] for k in analyzed_keywords]
     phase_counts = {}
@@ -123,13 +132,16 @@ def _build_prompt(analyzed_keywords: list[dict], raw_trends: dict) -> str:
 핵심 목표: 아직 경쟁이 적지만 검색량이 빠르게 오르는 성분/제품을 조기에 발굴하여, 경쟁자들이 몰리기 전에 생산·출시하는 것. 특히 약사 전문성으로 차별화 가능한 카테고리(약국용 화장품, 어린이 건강식품, 반려동물 영양제, 건강관리 기기 등)에 주목합니다.
 
 오늘 날짜: {today}
-분석 대상: 네이버 쇼핑 인사이트 — 식품전체·생활건강·출산육아·화장품미용·디지털가전 5개 대분류 통합 키워드
-총 분석 키워드 수: {len(analyzed_keywords)}개
+분석 대상: 네이버 쇼핑 인사이트 — 건강식품 제외 전체 카테고리 스윕 + AI 관련성 필터 통과 키워드
+총 분석 키워드 수: {len(analyzed_keywords)}개 (이 중 실버산업/고령친화 {len(silver_kws_all)}개, {len(silver_kws_all)/len(analyzed_keywords)*100 if analyzed_keywords else 0:.0f}%)
 트렌드 단계 분포: {phase_summary}
 
 === 키워드별 트렌드 데이터 (기회 점수 순) ===
 
 {keyword_data_text}
+
+=== 🏥 실버산업/고령친화용품 키워드 (최우선 — 반드시 별도 섹션으로 다룰 것) ===
+{silver_text}
 
 === 초반 선점 유력 키워드 (빠른 성장, 초기 단계) ===
 {early_rising_text}
@@ -157,26 +169,32 @@ def _build_prompt(analyzed_keywords: list[dict], raw_trends: dict) -> str:
    - 이번 수집 데이터에서 확인된 사실 위주로 (얼리라이징 몇 개, 성장중 몇 개, 하락 몇 개 등)
    - 카테고리를 넘나드는 공통 흐름이 데이터에서 보인다면 수치와 함께 기술
 
-2. ⚡ 초반 선점 유력 키워드 (우선순위 높음)
+2. 🏥 실버산업/고령친화용품 키워드 (최우선 — 반드시 작성, 생략 금지)
+   - 위 "실버산업/고령친화용품 키워드" 섹션의 데이터를 근거로 각 키워드의 기회점수·성장률을 인용
+   - 실버산업 키워드가 "해당 없음"이면, 억지로 지어내지 말고 정직하게 "이번 수집에서는 확보되지 않았다"고
+     쓰고, 왜 그럴 수 있는지(예: 해당 시즌 트렌드 부재, 카테고리 스캔 범위 한계 등) 데이터 관점에서 짧게 언급
+   - 실버산업 키워드가 있다면, 어느 상품군(의료용품/재활/안마/건강측정/당뇨관리/노안 등)에 속하는지도 명시
+
+3. ⚡ 초반 선점 유력 키워드 (우선순위 높음)
    - 실제 기회점수·성장률·얼리무버점수 수치를 함께 제시
    - 어느 카테고리에서 나온 키워드인지 명시
    - 왜 선점 기회인지 데이터로 설명 (낮은 과거 기반 + 최근 급등 패턴 등)
 
-3. 📈 안정 성장 키워드 (꾸준한 우상향)
+4. 📈 안정 성장 키워드 (꾸준한 우상향)
    - 실제 성장률·일관성점수·장기트렌드 수치를 함께 제시
    - 데이터로 확인된 사실 위주로 서술
 
-4. 🔍 카테고리별 주목 키워드 (데이터 기반)
+5. 🔍 카테고리별 주목 키워드 (데이터 기반)
    - 각 카테고리에서 기회점수 상위 키워드와 실제 수치를 나열
    - 식품전체 / 생활건강 / 출산육아 / 화장품미용 / 이미용가전 각각 별도 서술
 
-5. ⚠️ 주의: 반짝 급등 또는 이미 꺾인 키워드
+6. ⚠️ 주의: 반짝 급등 또는 이미 꺾인 키워드
    - 급등했지만 지속 가능성이 낮거나 이미 하락 중인 키워드
    - 주의해야 할 이유
 
-6. 💡 시장 진입 전략 제안
+7. 💡 시장 진입 전략 제안
    - 단기 (3개월 이내), 중기 (6-12개월), 장기 (1-2년) 전략
-   - 포트폴리오 구성 제안: 건강식품(핵심) + 건강연관 식품 + 신규 카테고리 확장
+   - 포트폴리오 구성 제안: 건강식품(핵심) + 실버산업/고령친화용품(최우선 확장) + 건강연관 식품 + 기타 신규 카테고리
    - 약사 전문성을 활용한 차별화 포인트 (성분 신뢰도, 처방 연계, 반려동물 영양제 등)
 
 보고서는 실용적이고 구체적으로 작성하되, 데이터에 기반한 근거를 반드시 포함하세요. 마케팅 용어보다는 실제 데이터 수치를 인용하며 분석하세요."""
@@ -419,10 +437,6 @@ def format_report(
             sections.append(f"  전체 카테고리 스윕 원본 후보 {raw_count}개 → AI 관련성 필터 통과 {filtered_count}개")
         sections.append("")
 
-    # Early rising keywords — highlighted at the top
-    early_rising_kws = [k for k in analyzed_keywords if k["trend_phase"] == "early_rising"]
-    growing_kws = [k for k in analyzed_keywords if k["trend_phase"] == "growing"]
-
     has_volume = any(kw.get("monthly_total_search", 0) > 0 for kw in analyzed_keywords)
 
     def _vol_pc(kw):
@@ -432,6 +446,29 @@ def format_report(
     def _vol_mob(kw):
         v = kw.get("monthly_mobile_search", 0)
         return f"{v:,}" if v else "-"
+
+    # 실버산업 전용 섹션 — 현재 최우선 사업 확장 방향이라 트렌드 단계와 무관하게 항상 별도로,
+    # 가장 먼저 노출한다 (2026-07-04: "실버산업 키워드가 거의 안 보인다"는 피드백 반영)
+    silver_kws = [k for k in analyzed_keywords if k.get("is_silver")]
+    total_count = len(analyzed_keywords)
+    silver_pct = (len(silver_kws) / total_count * 100) if total_count else 0
+    sections.append(f"## 🏥 실버산업/고령친화용품 집중 분석 ({len(silver_kws)}개, 전체의 {silver_pct:.0f}%)\n")
+    if silver_kws:
+        sections.append(f"{'순위':<4} {'키워드':<15} {'기회점수':>8} {'성장률':>12} {'트렌드단계':>12} {'얼리무버':>8} {'PC검색량':>12} {'모바일검색량':>13}")
+        sections.append("-" * 92)
+        for i, kw in enumerate(silver_kws):
+            sections.append(
+                f"{i+1:<4} {kw['keyword']:<15} {kw['opportunity_score']:>8.1f} "
+                f"{kw['recent_growth_rate']:>+11.1f}% {kw['trend_phase']:>12} {kw['early_mover_score']:>8.1f} "
+                f"{_vol_pc(kw):>12} {_vol_mob(kw):>13}"
+            )
+    else:
+        sections.append("  이번 수집에서는 실버산업 관련 키워드가 확보되지 않았습니다.")
+    sections.append("")
+
+    # Early rising keywords — highlighted at the top
+    early_rising_kws = [k for k in analyzed_keywords if k["trend_phase"] == "early_rising"]
+    growing_kws = [k for k in analyzed_keywords if k["trend_phase"] == "growing"]
 
     if early_rising_kws:
         sections.append(f"## ⚡ 지금 당장 주목할 얼리라이징 키워드 ({len(early_rising_kws)}개)\n")
