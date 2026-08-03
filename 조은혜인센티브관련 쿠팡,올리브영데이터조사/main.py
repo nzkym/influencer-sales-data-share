@@ -164,6 +164,15 @@ INCENTIVE_HEADERS = [
     "직전3개월평균대비증감",               # K
 ]
 
+# 쿠팡 인센티브 구간별 요율 (직전3개월평균 대비 증가액 기준)
+# 조건: 직전 3개월 평균 전체매출(J열) 대비 감소 없는 경우에만 지급
+COUPANG_TIERS = [
+    (50_000_000, 0.02),   # 5,000만 이상: 2.0%
+    (30_000_000, 0.015),  # 3,000만 ~ 5,000만: 1.5%
+    (15_000_000, 0.012),  # 1,500만 ~ 3,000만: 1.2%
+    (5_000_000,  0.01),   # 500만 ~ 1,500만: 1.0%
+]
+
 # 올리브영 월 매출 구간별 인센티브율 (월매출 하한(원), 인센티브율)
 OLIVE_TIERS = [
     (30_000_000, 0.02),
@@ -181,6 +190,14 @@ OLIVE_BONUS_TIERS = [
     (20_000_000, 300_000, "2,000만"),
     (30_000_000, 500_000, "3,000만"),
 ]
+
+
+def coupang_tier_rate(change: int) -> float:
+    """쿠팡 인센티브 구간별 요율 (증가액 기준). 구간 미달 시 0.0 반환."""
+    for threshold, rate in COUPANG_TIERS:
+        if change >= threshold:
+            return rate
+    return 0.0
 
 
 def olive_tier_rate(sales: int) -> float:
@@ -279,7 +296,7 @@ def write_incentive_sheet(
     olive_incentive = calc_olive_incentive(olive_sales_by_month, latest_month)
 
     values = [["마지막 업데이트:", updated_at] + [""] * 8, INCENTIVE_HEADERS]
-    # 셀 클릭 시 계산방식이 보이도록 E/F/G/K는 가능하면 시트 수식으로 작성
+    # 셀 클릭 시 계산방식이 보이도록 B/E/F/K는 가능하면 시트 수식으로 작성
     formula_cells: list[tuple[str, str]] = []
 
     for k, year_month in enumerate(months_desc):
@@ -295,24 +312,52 @@ def write_incentive_sheet(
             # C(index 2)는 메모열 스킵. E=index 4, F=index 5, G=index 6, I=index 8
             change, prev_avg, coupang_incentive = prow[4], prow[5], prow[6]
             olive_label = prow[8]
+            g_value = coupang_incentive  # 이전 보존값(숫자) 그대로 유지
         elif year_month == latest_month:
             # 당월(데이터 취합 진행중)은 다음달에 계산
             change, prev_avg, coupang_incentive = "", "", ""
             olive_label, total_incentive = "", ""
+            g_value = ""
         else:
+            # 전체매출 감소 조건 체크: K(직전3개월평균대비증감) >= 0이어야 쿠팡 인센 지급
+            prev_sales_cond = [total_sales_by_month.get(shift_month(year_month, -i)) for i in (1, 2, 3)]
+            if total_sales != "" and not any(v is None for v in prev_sales_cond):
+                condition_met = round(total_sales - sum(prev_sales_cond) / 3) >= 0
+            else:
+                condition_met = True  # 총매출 데이터 없으면 조건 미확인 → 정상 처리
+
             prev_avg = round(sum(amount_by_month.get(shift_month(year_month, -i), 0) for i in (1, 2, 3)) / 3)
             change = amount - prev_avg
-            coupang_incentive = round(change * 0.01) if change >= 5_000_000 else 0
+            rate = coupang_tier_rate(change)
+
+            if condition_met and rate > 0:
+                coupang_amount = round(change * rate)
+                coupang_label = f"{coupang_amount:,}원 ({rate * 100:g}% 구간)"
+            elif not condition_met:
+                coupang_amount = 0
+                coupang_label = "0원 (전체매출 감소)"
+            else:
+                coupang_amount = 0
+                coupang_label = "0원 (증가액 미달)"
 
             if has_prev3:
-                # E/F/G는 셀 클릭 시 계산방식이 보이도록 수식으로 작성 (B 계산용 값은 위에서 그대로 사용)
+                # E/F는 셀 클릭 시 계산방식이 보이도록 수식으로 작성
                 formula_cells.append((f"F{r}", f"=ROUND(AVERAGE(D{r + 1}:D{r + 3}),0)"))
                 formula_cells.append((f"E{r}", f"=D{r}-F{r}"))
-                formula_cells.append((f"G{r}", f"=IF(E{r}>=5000000,ROUND(E{r}*0.01,0),0)"))
                 change, prev_avg = "", ""
 
             olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
-            total_incentive = coupang_incentive + olive_total
+            total_incentive = ""  # B는 수식으로 작성
+            g_value = coupang_label  # "X,XXX원 (Y% 구간)" 텍스트
+
+            # B 수식: G/I 텍스트에서 금액("원" 앞 숫자)을 추출해 합산 (클릭 시 계산방식 표시)
+            b_formula = (
+                f'=IFERROR('
+                f'VALUE(SUBSTITUTE(LEFT(G{r},FIND("원",G{r})-1),",","")) + '
+                f'IF(I{r}="",0,VALUE(SUBSTITUTE(LEFT(I{r},FIND("원",I{r})-1),",",""))),'
+                f'"")'
+            )
+            formula_cells.append((f"B{r}", b_formula))
 
         # K(직전3개월평균대비증감): 당월은 비워두고 다음달 실행 시 계산
         if year_month == latest_month:
@@ -328,7 +373,7 @@ def write_incentive_sheet(
 
         values.append([
             year_month, total_incentive, amount, change, prev_avg,
-            coupang_incentive, olive_sales, olive_label, total_sales, total_change,
+            g_value, olive_sales, olive_label, total_sales, total_change,
         ])
 
     # C열(사용자 메모)을 건드리지 않도록 A:B와 D:K를 분리해서 clear/update
