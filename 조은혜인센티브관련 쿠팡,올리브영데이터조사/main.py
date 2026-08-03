@@ -29,6 +29,9 @@ OLIVE_YEAR = 2026
 TOTAL_SALES_SHEET_ID = "17fFgSgzxaS72rwM003XbpCOlrWE2eAny_7zRlZj2AR8"
 TOTAL_SALES_GID = 647519508  # 매출
 
+# 원본: 매출세금계산서 (쿠팡 D열 금액 산출)
+TAX_INVOICE_SHEET_ID = "1jnxC22t4awmqc8rCE19tjftIL-gUQ2M_tT5g1rKOPF0"
+
 # 가공 결과를 쓸 시트
 TARGET_SHEET_ID = "1ab_Pha20ULYGh__gzzV59BRIoR4x_HSCEY9TiAMYWPw"
 TARGET_GID_INBOUND = 2075262872    # 쿠팡 로켓 입고내역 (월별/SKU별 입고수량/입고금액)
@@ -149,6 +152,7 @@ NUMBER_FORMAT = {"numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}
 
 # 이 달부터 쿠팡 인센티브(C~E열) 자동계산 시작. 그 이전 달은 기존 입력값을 그대로 보존
 INCENTIVE_START_MONTH = "2026-06"
+D_START_MONTH = "2026-08"  # 이전 월 D열은 수기값 보존, 이달부터 세금계산서 자동계산
 
 INCENTIVE_HEADERS = [
     "년월",                                # A
@@ -272,11 +276,34 @@ def write_olive_sales_sheet(ws, sales_by_key: dict, updated_at: str):
         ws.format(f"C3:C{2 + len(rows)}", NUMBER_FORMAT)
 
 
+def get_coupang_tax_by_month(gc: gspread.Client, today) -> dict:
+    """매출세금계산서 탭에서 상호명에 '쿠팡'이 포함된 행만 필터해 월별 합산금액 반환.
+    당월: 1일~전일까지 합산 / 과거월: 해당월 전체 합산."""
+    ws = gc.open_by_key(TAX_INVOICE_SHEET_ID).worksheet("매출세금계산서")
+    rows = ws.get_values("A2:C10000")
+    result: dict[str, int] = {}
+    current_ym = today.strftime("%Y-%m")
+    for row in rows:
+        if len(row) < 3 or "쿠팡" not in row[1]:
+            continue
+        try:
+            date = datetime.strptime(row[0], "%Y-%m-%d").date()
+            amount = int(str(row[2]).replace(",", ""))
+        except (ValueError, AttributeError):
+            continue
+        ym = date.strftime("%Y-%m")
+        if ym == current_ym and date >= today:
+            continue  # 당월은 어제까지만
+        result[ym] = result.get(ym, 0) + amount
+    return result
+
+
 def write_incentive_sheet(
     ws,
     amount_by_month: dict,
     olive_sales_by_month: dict,
     total_sales_by_month: dict,
+    tax_by_month: dict,
     updated_at: str,
 ):
     # INCENTIVE_START_MONTH 이전 달의 인센티브 관련 컬럼(B,E,F,G,I)은 기존 입력값을 그대로 보존
@@ -378,13 +405,23 @@ def write_incentive_sheet(
     ws.batch_clear(["A1:B1000", "E1:K1000"])
     ws.update(range_name="A1", values=[[r[0], r[1]] for r in values], value_input_option="RAW")
     ws.update(range_name="E1", values=[r[3:] for r in values], value_input_option="RAW")
+
+    # D열: D_START_MONTH 이상인 행만 세금계산서 금액으로 덮어씀 (이전 월은 수기값 유지)
+    d_updates = [
+        {"range": f"D{3 + k}", "values": [[tax_by_month.get(ym, 0)]]}
+        for k, ym in enumerate(months_desc)
+        if ym >= D_START_MONTH
+    ]
+    if d_updates:
+        ws.batch_update(d_updates, value_input_option="RAW")
+
     if formula_cells:
         ws.batch_update(
             [{"range": cell, "values": [[formula]]} for cell, formula in formula_cells],
             value_input_option="USER_ENTERED",
         )
     ws.format(f"B3:B{2 + len(months_desc)}", NUMBER_FORMAT)
-    ws.format(f"E3:K{2 + len(months_desc)}", NUMBER_FORMAT)
+    ws.format(f"D3:K{2 + len(months_desc)}", NUMBER_FORMAT)
 
 
 def main():
@@ -410,8 +447,11 @@ def main():
     total_sales_rows = total_sales_ws.get_all_values()
     total_sales_by_month = aggregate_total_sales(total_sales_rows)
 
+    today = datetime.now(KST).date()
+    tax_by_month = get_coupang_tax_by_month(client, today)
+
     incentive_ws = get_worksheet(client, TARGET_SHEET_ID, TARGET_GID_INCENTIVE)
-    write_incentive_sheet(incentive_ws, amount_by_month, olive_sales_by_month, total_sales_by_month, updated_at)
+    write_incentive_sheet(incentive_ws, amount_by_month, olive_sales_by_month, total_sales_by_month, tax_by_month, updated_at)
 
     print(
         f"완료: 쿠팡 {len(qty_by_key)}개 (년월,SKU), "
