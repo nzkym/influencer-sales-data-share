@@ -375,16 +375,16 @@ def write_incentive_sheet(
         ])
 
     # C열(사용자 메모)을 건드리지 않도록 A:B와 D:K를 분리해서 clear/update
-    ws.batch_clear(["A1:B1000", "D1:K1000"])
+    ws.batch_clear(["A1:B1000", "E1:K1000"])
     ws.update(range_name="A1", values=[[r[0], r[1]] for r in values], value_input_option="RAW")
-    ws.update(range_name="D1", values=[r[2:] for r in values], value_input_option="RAW")
+    ws.update(range_name="E1", values=[r[3:] for r in values], value_input_option="RAW")
     if formula_cells:
         ws.batch_update(
             [{"range": cell, "values": [[formula]]} for cell, formula in formula_cells],
             value_input_option="USER_ENTERED",
         )
     ws.format(f"B3:B{2 + len(months_desc)}", NUMBER_FORMAT)
-    ws.format(f"D3:K{2 + len(months_desc)}", NUMBER_FORMAT)
+    ws.format(f"E3:K{2 + len(months_desc)}", NUMBER_FORMAT)
 
 
 def main():
