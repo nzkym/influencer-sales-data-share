@@ -319,25 +319,13 @@ def write_incentive_sheet(
             olive_label, total_incentive = "", ""
             g_value = ""
         else:
-            # 전체매출 감소 조건 체크: K(직전3개월평균대비증감) >= 0이어야 쿠팡 인센 지급
-            prev_sales_cond = [total_sales_by_month.get(shift_month(year_month, -i)) for i in (1, 2, 3)]
-            if total_sales != "" and not any(v is None for v in prev_sales_cond):
-                condition_met = round(total_sales - sum(prev_sales_cond) / 3) >= 0
-            else:
-                condition_met = True  # 총매출 데이터 없으면 조건 미확인 → 정상 처리
-
             prev_avg = round(sum(amount_by_month.get(shift_month(year_month, -i), 0) for i in (1, 2, 3)) / 3)
             change = amount - prev_avg
             rate = coupang_tier_rate(change)
 
-            if condition_met and rate > 0:
-                coupang_amount = round(change * rate)
-                coupang_label = f"{coupang_amount:,}원 ({rate * 100:g}% 구간)"
-            elif not condition_met:
-                coupang_amount = 0
-                coupang_label = "0원 (전체매출 감소)"
+            if rate > 0:
+                coupang_label = f"{round(change * rate):,}원 ({rate * 100:g}% 구간)"
             else:
-                coupang_amount = 0
                 coupang_label = "0원 (증가액 미달)"
 
             if has_prev3:
