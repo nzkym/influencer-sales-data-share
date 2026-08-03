@@ -1367,8 +1367,45 @@ td:first-child{{color:#555;width:38%}}
         # Google Doc → PDF
         pdf_bytes = svc.files().export(fileId=doc["id"], mimeType="application/pdf").execute()
 
-        # PDF → '정산서' 폴더 업로드
-        pdf_name  = f"{title} 정산서.pdf"
+        # 파일명: 완료 폴더 xlsx 파일명 기반 (예: 두꺼비팜_6월30일_10시_최종_정산서.pdf)
+        import re as _re
+        safe_title = _re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+        pdf_name = f"{safe_title}_정산서.pdf"
+        try:
+            done_q = (
+                f"name='완료' and mimeType='application/vnd.google-apps.folder' "
+                f"and '{PHARMABROS_DRIVE_FOLDER_ID}' in parents and trashed=false"
+            )
+            done_folders = svc.files().list(q=done_q, fields="files(id)").execute().get("files", [])
+            if done_folders:
+                done_fid = done_folders[0]["id"]
+                xlsx_files = svc.files().list(
+                    q=f"'{done_fid}' in parents and trashed=false",
+                    fields="files(name)",
+                    orderBy="createdTime desc",
+                ).execute().get("files", [])
+                for xf in xlsx_files:
+                    if xf["name"].startswith(safe_title + "_") and xf["name"].endswith(".xlsx"):
+                        base = xf["name"][:-5]          # .xlsx 제거
+                        base = base.replace("_업로드건", "")
+                        pdf_name = base + "_정산서.pdf"
+                        break
+        except Exception:
+            pass
+
+        # '정산서' 폴더 내 동일 캠페인 기존 PDF 전부 삭제 (중복 방지)
+        try:
+            old_files = svc.files().list(
+                q=f"'{PHARMABROS_SETTLEMENT_FOLDER_ID}' in parents and trashed=false",
+                fields="files(id,name)",
+            ).execute().get("files", [])
+            for of in old_files:
+                if of["name"].startswith(safe_title + "_") or of["name"] == f"{title} 정산서.pdf":
+                    svc.files().update(fileId=of["id"], body={"trashed": True}).execute()
+                    print(f"  [파마브로스 정산서 PDF] 기존 파일 삭제: {of['name']}")
+        except Exception:
+            pass
+
         pdf_media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
         svc.files().create(
             body={"name": pdf_name, "parents": [PHARMABROS_SETTLEMENT_FOLDER_ID]},
@@ -1378,7 +1415,7 @@ td:first-child{{color:#555;width:38%}}
         # 임시 Google Doc 삭제
         svc.files().delete(fileId=doc["id"]).execute()
 
-        print(f"  [파마브로스 정산서 PDF] '{title[:30]}' → Drive 정산서 폴더 업로드 완료")
+        print(f"  [파마브로스 정산서 PDF] '{title[:30]}' → {pdf_name} 업로드 완료")
 
     except Exception as e:
         print(f"  [파마브로스 정산서 PDF 오류] {e}")
