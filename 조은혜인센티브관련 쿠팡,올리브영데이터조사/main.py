@@ -329,14 +329,24 @@ def write_incentive_sheet(
                 coupang_label = "0원 (증가액 미달)"
 
             if has_prev3:
-                # E/F는 셀 클릭 시 계산방식이 보이도록 수식으로 작성
+                # E/F/G 모두 수식으로 작성 → D 수동변경 시 E→G→B 자동연동
                 formula_cells.append((f"F{r}", f"=ROUND(AVERAGE(D{r + 1}:D{r + 3}),0)"))
                 formula_cells.append((f"E{r}", f"=D{r}-F{r}"))
+                formula_cells.append((f"G{r}",
+                    f'=IFS('
+                    f'E{r}>=50000000,TEXT(ROUND(E{r}*0.02,0),"#,##0")&"원 (2% 구간)",'
+                    f'E{r}>=30000000,TEXT(ROUND(E{r}*0.015,0),"#,##0")&"원 (1.5% 구간)",'
+                    f'E{r}>=15000000,TEXT(ROUND(E{r}*0.012,0),"#,##0")&"원 (1.2% 구간)",'
+                    f'E{r}>=5000000,TEXT(ROUND(E{r}*0.01,0),"#,##0")&"원 (1% 구간)",'
+                    f'TRUE,"0원 (증가액 미달)")'
+                ))
                 change, prev_avg = "", ""
+                g_value = ""  # 수식으로 덮어씌워짐
 
             olive_total, olive_label = olive_incentive.get(year_month, (0, ""))
             total_incentive = ""  # B는 수식으로 작성
-            g_value = coupang_label  # "X,XXX원 (Y% 구간)" 텍스트
+            if not has_prev3:
+                g_value = coupang_label  # has_prev3=False 구간은 Python 계산값 유지
 
             # B 수식: G/I 텍스트에서 금액("원" 앞 숫자)을 추출해 합산 (클릭 시 계산방식 표시)
             b_formula = (
