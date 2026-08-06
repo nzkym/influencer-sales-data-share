@@ -1432,12 +1432,7 @@ SAEUNPUM_HEADER  = ["", "상품코드", "상품명", "수량", "수령자명", "
 def _get_or_create_saeunpum_ws(ss):
     """마스터시트에서 '사은품당첨자' 탭을 반환하거나 신규 생성한다."""
     try:
-        ws = ss.worksheet(SAEUNPUM_TAB_NAME)
-        # 헤더 행이 없으면 추가
-        first = ws.row_values(1)
-        if not first or first[0:3] != SAEUNPUM_HEADER[0:3]:
-            ws.insert_row(SAEUNPUM_HEADER, index=1)
-        return ws
+        return ss.worksheet(SAEUNPUM_TAB_NAME)
     except gspread.WorksheetNotFound:
         ws = ss.add_worksheet(title=SAEUNPUM_TAB_NAME, rows=1000, cols=len(SAEUNPUM_HEADER))
         ws.append_row(SAEUNPUM_HEADER, value_input_option="USER_ENTERED")
@@ -1575,6 +1570,9 @@ def _run_saeunpum_lottery(force: bool = False):
 
         i_col = i_col_prefix + product_name
 
+        # C열용 상품명: [인플루언서태그] 접두어 제거
+        product_name_clean = re.sub(r'^\[.*?\]\s*', '', product_name).strip()
+
         # ── 구매자별 주문 그룹화 ─────────────────────────────
         buyer_map = {}  # (수령자명, 전화번호) → 첫 번째 주문 dict
         buyer_count = {}
@@ -1613,10 +1611,10 @@ def _run_saeunpum_lottery(force: bool = False):
             tel_last4 = tel[-4:] if len(tel) >= 4 else tel
             # [A, B, C, D, E, F, G, H, I, J]
             new_rows.append([
-                "",            # A: pimz_order_id (공백)
-                "",            # B: 상품코드 (이지어드민, 불가)
-                product_name,  # C: 상품명
-                1,             # D: 수량 (고정)
+                "",                  # A: pimz_order_id (공백)
+                "",                  # B: 상품코드 (이지어드민, 불가)
+                product_name_clean,  # C: 상품명 ([태그] 제거)
+                1,                   # D: 수량 (고정)
                 o["수령자명"], # E: 수령자명
                 o["전화번호"], # F: 전화번호
                 o["주소"],    # G: 주소
