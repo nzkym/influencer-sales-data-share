@@ -1523,6 +1523,11 @@ def _run_saeunpum_lottery(force: bool = False):
         if not force and (days_since_end < 1 or days_since_end > 7):
             continue
 
+        # 종료 바로 다음날(days_since_end==1)은 오전 7시 이후에만 처리
+        if not force and days_since_end == 1 and datetime.now(KST).hour < 7:
+            print(f"  [사은품] '{title[:30]}' 종료 다음날이지만 오전 7시 이전 → 스킵")
+            continue
+
         # 이미 처리된 캠페인 스킵 (I열에 제목이 포함된 행이 있으면)
         already = any(title in ic for ic in existing_i)
         if already:
