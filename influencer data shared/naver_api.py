@@ -419,3 +419,103 @@ def get_pharmabros_orders(
     result.sort(key=lambda x: x["주문일시"])
     print(f"  → [파마브로스] 합계 {len(result)}건 수집 완료")
     return result
+
+
+# 사은품 추첨 시 제외할 취소/반품 상태
+_CANCEL_STATUSES = {
+    "CANCEL_DONE", "RETURN_DONE", "CANCEL_REQUESTED", "RETURN_INITIATED",
+    "DELIVERING_RETURNED", "COLLECT_WAITED",
+}
+
+
+def get_saeunpum_orders(
+    client_id: str,
+    client_secret: str,
+    product_no: str,
+    date_from: str,
+    date_to: str,
+) -> tuple:
+    """사은품 추첨용: 구매자 정보 포함 주문 목록 (취소·반품 제외).
+
+    반환: (orders, product_name)
+      orders = [
+        {"주문번호": ..., "수령자명": ..., "전화번호": ..., "주소": ..., "옵션": ...},
+        ...
+      ]
+    """
+    token = _get_access_token(client_id, client_secret)
+    headers = {"Authorization": f"Bearer {token}"}
+
+    print(f"  → [사은품] 주문 조회 (상품번호: {product_no}, {date_from} ~ {date_to})")
+
+    current = datetime.strptime(date_from, "%Y-%m-%d")
+    end     = datetime.strptime(date_to,   "%Y-%m-%d")
+    today   = datetime.now()
+
+    valid_ids = []
+    while current <= min(end, today):
+        next_day = current + timedelta(days=1)
+        from_str = current.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+        to_str   = next_day.strftime("%Y-%m-%dT00:00:00.000") + "%2B09:00"
+
+        day_items = _query_one_day(headers, from_str, to_str)
+        for item in day_items:
+            content = item.get("content", {})
+            po      = content.get("productOrder", {})
+            if str(po.get("productId", "")) != str(product_no):
+                continue
+            if po.get("productOrderStatus", "") in _CANCEL_STATUSES:
+                continue
+            oid = str(item.get("productOrderId", ""))
+            if oid:
+                valid_ids.append(oid)
+        current = next_day
+
+    if not valid_ids:
+        print(f"  → [사은품] 유효 주문 없음")
+        return [], ""
+
+    # query 엔드포인트 → 구매자 정보 포함 상세 조회
+    orders = []
+    product_name = ""
+    for start in range(0, len(valid_ids), 100):
+        chunk = valid_ids[start:start + 100]
+        resp = requests.post(
+            f"{BASE_URL}/external/v1/pay-order/seller/product-orders/query",
+            headers={**headers, "Content-Type": "application/json"},
+            json={"productOrderIds": chunk},
+            timeout=30,
+        )
+        if not resp.ok:
+            print(f"  → [사은품] query 실패: {resp.status_code}")
+            continue
+        for item in resp.json().get("data", []):
+            po       = item.get("productOrder", {})
+            order    = item.get("order", {})
+            delivery = item.get("delivery", {})
+
+            if not product_name:
+                product_name = po.get("productName") or ""
+
+            recv_name = (delivery.get("receiverName")
+                         or order.get("ordererName") or "")
+            recv_tel  = (delivery.get("receiverTel1")
+                         or delivery.get("receiverTel")
+                         or delivery.get("receiverMobile")
+                         or order.get("ordererTel") or "")
+            base_addr   = delivery.get("receiverBaseAddress") or ""
+            detail_addr = delivery.get("receiverDetailAddress") or ""
+            full_addr   = f"{base_addr} {detail_addr}".strip()
+            option      = po.get("productOption") or "기본 옵션"
+            order_id    = str(po.get("productOrderId", ""))
+
+            orders.append({
+                "주문번호": order_id,
+                "수령자명": recv_name,
+                "전화번호": recv_tel,
+                "주소":     full_addr,
+                "옵션":     option,
+            })
+
+    print(f"  → [사은품] {len(orders)}건 조회 완료 (상품명: {product_name[:30]})")
+    return orders, product_name

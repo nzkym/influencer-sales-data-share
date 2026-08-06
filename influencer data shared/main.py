@@ -975,6 +975,9 @@ def run_once():
     # ── 파마브로스 정산 백필 (종료 캠페인 중 미처리건) ────
     _backfill_pharmabros_settlements()
 
+    # ── 사은품 추첨 (종료 +1~7일 캠페인, L열 있을 때) ────
+    _run_saeunpum_lottery()
+
     print(f"{'='*55}\n")
 
 
@@ -1421,6 +1424,198 @@ td:first-child{{color:#555;width:38%}}
         print(f"  [파마브로스 정산서 PDF 오류] {e}")
 
 
+# ── 사은품 추첨 ────────────────────────────────────────────
+SAEUNPUM_SHEET_ID = "10VNdFTacTIHE109iVJuqbkDEf34U02sXJeyb01o4S_Y"
+
+
+def _run_saeunpum_lottery(force: bool = False):
+    """
+    마스터시트 시트1 L열(사은품인원)에 숫자가 있는 종료 캠페인을 찾아 추첨 후
+    사은품 시트에 기재한다.
+
+    날짜 조건 (force=False일 때):
+      종료일 +1일 ≤ today ≤ 종료일 +7일
+    force=True → 날짜 체크 없이 즉시 실행 (테스트용)
+    """
+    import random
+
+    print("\n[사은품 추첨] 시작...")
+
+    # ── 마스터시트 읽기 ──────────────────────────────────────
+    if not MASTER_SHEET_URL:
+        print("  [사은품] MASTER_SHEET_URL 없음")
+        return
+
+    try:
+        creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        gc = gspread.authorize(creds)
+        sh_id = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        ss = gc.open_by_key(sh_id)
+        ws1 = ss.sheet1  # 시트1
+        master_rows = ws1.get_all_records()
+    except Exception as e:
+        print(f"  [사은품] 마스터시트 읽기 실패: {e}")
+        return
+
+    # ── 사은품 시트 기존 내용 읽기 (중복 방지) ──────────────
+    try:
+        saeunpum_ss = gc.open_by_key(SAEUNPUM_SHEET_ID)
+        saeunpum_ws = saeunpum_ss.worksheet("시트1")
+        existing_rows = saeunpum_ws.get_all_values()
+        # I열(index 8) 기재된 내용 목록
+        existing_i = {r[8] for r in existing_rows[1:] if len(r) > 8 and r[8].strip()}
+    except Exception as e:
+        print(f"  [사은품] 사은품 시트 읽기 실패: {e}")
+        return
+
+    KST = timezone(timedelta(hours=9))
+    today = datetime.now(KST).date()
+    processed = 0
+
+    for row in master_rows:
+        title     = str(row.get("제목") or "").strip()
+        start_str = str(row.get("시작일자") or "").strip()
+        end_str   = str(row.get("종료일자") or "").strip()
+        url       = str(row.get("상품링크") or "").strip()
+        store     = str(row.get("스토어") or "").strip().lower()
+
+        # L열: 헤더명이 길어서 포함 검색
+        saeunpum_key = next(
+            (k for k in row.keys() if "사은품인원" in k), None
+        )
+        saeunpum_n_raw = str(row.get(saeunpum_key) or "").strip() if saeunpum_key else ""
+
+        if not title or not saeunpum_n_raw:
+            continue
+
+        try:
+            saeunpum_n = int(saeunpum_n_raw)
+        except ValueError:
+            continue
+
+        if saeunpum_n <= 0:
+            continue
+
+        # 날짜 파싱
+        try:
+            start_date = parse_date(start_str)
+            end_date   = parse_date(end_str)
+        except Exception:
+            continue
+
+        # 날짜 조건 체크
+        days_since_end = (today - end_date).days
+        if not force and (days_since_end < 1 or days_since_end > 7):
+            continue
+
+        # 이미 처리된 캠페인 스킵 (I열에 제목이 포함된 행이 있으면)
+        already = any(title in ic for ic in existing_i)
+        if already:
+            print(f"  [사은품] '{title[:30]}' 이미 처리됨, 스킵")
+            continue
+
+        # 스토어 API 자격증명
+        if store not in STORE_CREDENTIALS:
+            print(f"  [사은품] '{title[:30]}' 스토어 '{store}' 미등록")
+            continue
+        api_id, api_secret = STORE_CREDENTIALS[store]
+        if not api_id or not api_secret:
+            print(f"  [사은품] '{title[:30]}' API 키 없음")
+            continue
+
+        # 상품번호 추출
+        try:
+            product_no = extract_product_no(url)
+        except ValueError:
+            print(f"  [사은품] '{title[:30]}' 상품번호 추출 실패")
+            continue
+
+        # I열 내용 포맷: "2026.7.21~27_띱약사_상품명"
+        start_fmt = f"{start_date.year}.{start_date.month}.{start_date.day}"
+        i_col_prefix = f"{start_fmt}~{end_date.day}_{title}_"
+
+        print(f"\n  [사은품] '{title[:30]}' → {saeunpum_n}명 추첨 시작...")
+
+        # ── Naver API로 주문 + 구매자 정보 조회 ──────────────
+        try:
+            orders, product_name = naver_api.get_saeunpum_orders(
+                client_id=api_id,
+                client_secret=api_secret,
+                product_no=product_no,
+                date_from=start_date.strftime("%Y-%m-%d"),
+                date_to=end_date.strftime("%Y-%m-%d"),
+            )
+        except Exception as e:
+            print(f"  [사은품] '{title[:30]}' 주문 조회 오류: {e}")
+            continue
+
+        if not orders:
+            print(f"  [사은품] '{title[:30]}' 주문 없음")
+            continue
+
+        i_col = i_col_prefix + product_name
+
+        # ── 구매자별 주문 그룹화 ─────────────────────────────
+        buyer_map = {}  # (수령자명, 전화번호) → 첫 번째 주문 dict
+        buyer_count = {}
+        for o in orders:
+            key = (o["수령자명"].strip(), o["전화번호"].strip())
+            if key not in buyer_map:
+                buyer_map[key] = o
+            buyer_count[key] = buyer_count.get(key, 0) + 1
+
+        all_buyers  = list(buyer_map.keys())
+        multi_buyers = [k for k in all_buyers if buyer_count[k] >= 2]
+        print(f"  → 전체 구매자: {len(all_buyers)}명, 다구매자(2건+): {len(multi_buyers)}명")
+
+        # ── 추첨 (70% 다구매자, 30% 전체) ───────────────────
+        n_multi = round(saeunpum_n * 0.7)
+        n_rest  = saeunpum_n - n_multi
+
+        if len(multi_buyers) <= n_multi:
+            winners_multi = multi_buyers[:]
+        else:
+            winners_multi = random.sample(multi_buyers, n_multi)
+
+        already_won = set(winners_multi)
+        rest_pool   = [k for k in all_buyers if k not in already_won]
+        winners_rest = random.sample(rest_pool, min(n_rest, len(rest_pool)))
+
+        winners = winners_multi + winners_rest
+        print(f"  → 당첨: 다구매자 {len(winners_multi)}명 + 일반 {len(winners_rest)}명 = 총 {len(winners)}명")
+
+        # ── 사은품 시트에 기재 ────────────────────────────────
+        new_rows = []
+        for key in winners:
+            o = buyer_map[key]
+            # [A, B, C, D, E, F, G, H, I]
+            new_rows.append([
+                "",                    # A: pimz_order_id (공백)
+                "",                    # B: 상품코드 (이지어드민, 불가)
+                product_name,          # C: 상품명
+                1,                     # D: 수량 (고정)
+                o["수령자명"],          # E: 수령자명
+                o["전화번호"],          # F: 전화번호
+                o["주소"],             # G: 주소
+                "",                    # H: 메모
+                i_col,                 # I: 내용
+            ])
+
+        if new_rows:
+            try:
+                saeunpum_ws.append_rows(new_rows, value_input_option="USER_ENTERED")
+                print(f"  → 사은품 시트에 {len(new_rows)}행 기재 완료")
+                existing_i.add(i_col)  # 중복 방지 업데이트
+                processed += 1
+            except Exception as e:
+                print(f"  [사은품] 시트 기재 오류: {e}")
+
+    if processed == 0:
+        print("  [사은품 추첨] 처리할 캠페인 없음 (날짜 조건 미충족 or 이미 처리됨)")
+    else:
+        print(f"  [사은품 추첨] 완료: {processed}개 캠페인 처리")
+
+
 def _run_pharmabros_if_needed(force: bool = False):
     """
     파마브로스파일공유여부=파마브로스파일공유 캠페인을 찾아,
@@ -1609,6 +1804,12 @@ def main():
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
         _run_pharmabros_if_needed(force=True)
         _backfill_pharmabros_settlements()
+        return
+
+    # 사은품 추첨 테스트: 날짜 체크 없이 즉시 실행
+    if "--test-lottery" in sys.argv:
+        print("\n[테스트 모드] 사은품 추첨 강제 실행 (날짜 체크 무시)\n")
+        _run_saeunpum_lottery(force=True)
         return
 
     # 완료 폴더 이동 테스트: python3 main.py --test-move 캠페인제목
