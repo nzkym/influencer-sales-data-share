@@ -1425,13 +1425,29 @@ td:first-child{{color:#555;width:38%}}
 
 
 # ── 사은품 추첨 ────────────────────────────────────────────
-SAEUNPUM_SHEET_ID = "10VNdFTacTIHE109iVJuqbkDEf34U02sXJeyb01o4S_Y"
+SAEUNPUM_TAB_NAME = "사은품당첨자"
+SAEUNPUM_HEADER  = ["", "상품코드", "상품명", "수량", "수령자명", "전화번호", "주소", "메모", "내용", "전화끝4자리"]
+
+
+def _get_or_create_saeunpum_ws(ss):
+    """마스터시트에서 '사은품당첨자' 탭을 반환하거나 신규 생성한다."""
+    try:
+        ws = ss.worksheet(SAEUNPUM_TAB_NAME)
+        # 헤더 행이 없으면 추가
+        first = ws.row_values(1)
+        if not first or first[0:3] != SAEUNPUM_HEADER[0:3]:
+            ws.insert_row(SAEUNPUM_HEADER, index=1)
+        return ws
+    except gspread.WorksheetNotFound:
+        ws = ss.add_worksheet(title=SAEUNPUM_TAB_NAME, rows=1000, cols=len(SAEUNPUM_HEADER))
+        ws.append_row(SAEUNPUM_HEADER, value_input_option="USER_ENTERED")
+        return ws
 
 
 def _run_saeunpum_lottery(force: bool = False):
     """
     마스터시트 시트1 L열(사은품인원)에 숫자가 있는 종료 캠페인을 찾아 추첨 후
-    사은품 시트에 기재한다.
+    마스터시트의 '사은품당첨자' 탭에 최신순(위)으로 기재한다.
 
     날짜 조건 (force=False일 때):
       종료일 +1일 ≤ today ≤ 종료일 +7일
@@ -1457,15 +1473,14 @@ def _run_saeunpum_lottery(force: bool = False):
         print(f"  [사은품] 마스터시트 읽기 실패: {e}")
         return
 
-    # ── 사은품 시트 기존 내용 읽기 (중복 방지) ──────────────
+    # ── 사은품당첨자 탭 (마스터시트 내) ─────────────────────
     try:
-        saeunpum_ss = gc.open_by_key(SAEUNPUM_SHEET_ID)
-        saeunpum_ws = saeunpum_ss.worksheet("시트1")
+        saeunpum_ws = _get_or_create_saeunpum_ws(ss)
         existing_rows = saeunpum_ws.get_all_values()
-        # I열(index 8) 기재된 내용 목록
+        # I열(index 8) 기재된 내용 목록 (중복 방지)
         existing_i = {r[8] for r in existing_rows[1:] if len(r) > 8 and r[8].strip()}
     except Exception as e:
-        print(f"  [사은품] 사은품 시트 읽기 실패: {e}")
+        print(f"  [사은품] 사은품당첨자 탭 읽기 실패: {e}")
         return
 
     KST = timezone(timedelta(hours=9))
@@ -1585,31 +1600,35 @@ def _run_saeunpum_lottery(force: bool = False):
         winners = winners_multi + winners_rest
         print(f"  → 당첨: 다구매자 {len(winners_multi)}명 + 일반 {len(winners_rest)}명 = 총 {len(winners)}명")
 
-        # ── 사은품 시트에 기재 ────────────────────────────────
+        # ── 사은품당첨자 탭에 기재 (최신순: 헤더 바로 아래 삽입) ─
         new_rows = []
         for key in winners:
             o = buyer_map[key]
-            # [A, B, C, D, E, F, G, H, I]
+            tel = o["전화번호"]
+            tel_last4 = tel[-4:] if len(tel) >= 4 else tel
+            # [A, B, C, D, E, F, G, H, I, J]
             new_rows.append([
-                "",                    # A: pimz_order_id (공백)
-                "",                    # B: 상품코드 (이지어드민, 불가)
-                product_name,          # C: 상품명
-                1,                     # D: 수량 (고정)
-                o["수령자명"],          # E: 수령자명
-                o["전화번호"],          # F: 전화번호
-                o["주소"],             # G: 주소
-                "",                    # H: 메모
-                i_col,                 # I: 내용
+                "",            # A: pimz_order_id (공백)
+                "",            # B: 상품코드 (이지어드민, 불가)
+                product_name,  # C: 상품명
+                1,             # D: 수량 (고정)
+                o["수령자명"], # E: 수령자명
+                o["전화번호"], # F: 전화번호
+                o["주소"],    # G: 주소
+                "",            # H: 메모
+                i_col,         # I: 내용
+                tel_last4,     # J: 전화끝4자리
             ])
 
         if new_rows:
             try:
-                saeunpum_ws.append_rows(new_rows, value_input_option="USER_ENTERED")
-                print(f"  → 사은품 시트에 {len(new_rows)}행 기재 완료")
+                # row=2 삽입 → 헤더(1행) 바로 아래, 최신이 항상 위
+                saeunpum_ws.insert_rows(new_rows, row=2, value_input_option="USER_ENTERED")
+                print(f"  → 사은품당첨자 탭에 {len(new_rows)}행 기재 완료 (최신순)")
                 existing_i.add(i_col)  # 중복 방지 업데이트
                 processed += 1
             except Exception as e:
-                print(f"  [사은품] 시트 기재 오류: {e}")
+                print(f"  [사은품] 탭 기재 오류: {e}")
 
     if processed == 0:
         print("  [사은품 추첨] 처리할 캠페인 없음 (날짜 조건 미충족 or 이미 처리됨)")
