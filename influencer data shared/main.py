@@ -1570,13 +1570,14 @@ def _run_saeunpum_lottery(force: bool = False):
 
         # ── 추첨 (70% 다구매자, 30% 전체) ───────────────────
         n_multi = round(saeunpum_n * 0.7)
-        n_rest  = saeunpum_n - n_multi
 
         if len(multi_buyers) <= n_multi:
             winners_multi = multi_buyers[:]
         else:
             winners_multi = random.sample(multi_buyers, n_multi)
 
+        # 다구매자 부족분을 전체 풀에서 채워 항상 saeunpum_n명 확보
+        n_rest = saeunpum_n - len(winners_multi)
         already_won = set(winners_multi)
         rest_pool   = [k for k in all_buyers if k not in already_won]
         winners_rest = random.sample(rest_pool, min(n_rest, len(rest_pool)))

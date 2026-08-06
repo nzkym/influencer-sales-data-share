@@ -492,19 +492,18 @@ def get_saeunpum_orders(
         for item in resp.json().get("data", []):
             po       = item.get("productOrder", {})
             order    = item.get("order", {})
-            delivery = item.get("delivery", {})
+            ship     = po.get("shippingAddress", {})
 
             if not product_name:
                 product_name = po.get("productName") or ""
 
-            recv_name = (delivery.get("receiverName")
+            recv_name = (ship.get("name")
                          or order.get("ordererName") or "")
-            recv_tel  = (delivery.get("receiverTel1")
-                         or delivery.get("receiverTel")
-                         or delivery.get("receiverMobile")
+            recv_tel  = (ship.get("tel1")
+                         or ship.get("tel2")
                          or order.get("ordererTel") or "")
-            base_addr   = delivery.get("receiverBaseAddress") or ""
-            detail_addr = delivery.get("receiverDetailAddress") or ""
+            base_addr   = ship.get("baseAddress") or ""
+            detail_addr = ship.get("detailedAddress") or ""
             full_addr   = f"{base_addr} {detail_addr}".strip()
             option      = po.get("productOption") or "기본 옵션"
             order_id    = str(po.get("productOrderId", ""))
