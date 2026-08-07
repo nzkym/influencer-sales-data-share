@@ -1249,7 +1249,7 @@ def _backfill_pharmabros_settlements():
 
 
 def _upload_pharmabros_settlement_pdf(campaign, total_payment: int):
-    """파마브로스 정산서 PDF 생성 후 Drive '정산서' 폴더에 자동 업로드.
+    """파마브로스 정산서 HTML 생성 후 Drive '정산서' 폴더에 자동 업로드.
     total_payment = 파마브로스 고정 옵션가 기준 합계금액 (취소 제외).
     정산금액은 내부에서 J열 수수료율 적용해 계산.
     """
@@ -1304,44 +1304,60 @@ def _upload_pharmabros_settlement_pdf(campaign, total_payment: int):
     comm_pct = comm_rate * 100
 
     html = f"""<!DOCTYPE html>
-<html lang="ko"><head><meta charset="UTF-8"><style>
-body{{font-family:"Malgun Gothic",sans-serif;color:#1a1a2e;max-width:680px;margin:0 auto;padding:20px}}
-.banner{{background:linear-gradient(135deg,#1a2744 0%,#2d3f6b 100%);padding:32px 40px 28px;margin-bottom:20px}}
-.bt{{color:#fff;font-size:28px;letter-spacing:6px;font-weight:700;margin-bottom:6px}}
-.bs{{color:rgba(255,255,255,.9);font-size:13px;letter-spacing:2px}}
-.bd{{color:rgba(255,255,255,.8);font-size:12px;text-align:right;margin-top:10px}}
-.confirm{{background:#f0f4ff;border-left:4px solid #1a2744;padding:12px 16px;font-size:14px;color:#333;margin-bottom:24px}}
+<html lang="ko"><head><meta charset="UTF-8"><title>정산서</title><style>
+@page{{size:A4;margin:12mm 15mm}}
+*{{box-sizing:border-box;margin:0;padding:0}}
+body{{font-family:"Malgun Gothic","맑은 고딕",sans-serif;background:#fff;color:#1a1a2e;max-width:680px;margin:0 auto;padding:0}}
+.print-area{{padding:12px 16px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;gap:12px}}
+.btn{{background:#1a2744;color:#fff;border:none;padding:9px 22px;cursor:pointer;border-radius:4px;font-size:13px;letter-spacing:0.5px}}
+.btn:hover{{background:#2d3f6b}}
+.print-tip{{font-size:11px;color:#888;line-height:1.5}}
+.banner{{background:linear-gradient(135deg,#1a2744 0%,#2d3f6b 100%);padding:32px 40px 28px;position:relative;overflow:hidden}}
+.banner::after{{content:"";position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.05)}}
+.banner-title{{color:#ffffff;font-size:30px;letter-spacing:6px;font-weight:700;margin-bottom:6px;text-shadow:0 1px 3px rgba(0,0,0,0.3)}}
+.banner-sub{{color:rgba(255,255,255,0.9);font-size:13px;letter-spacing:2px;font-weight:500}}
+.banner-date{{color:rgba(255,255,255,0.8);font-size:12px;text-align:right;margin-top:10px}}
+.body{{padding:28px 40px 32px}}
+.confirm-box{{background:#f0f4ff;border-left:4px solid #1a2744;padding:12px 16px;font-size:14px;color:#333;margin-bottom:24px;line-height:1.6}}
 table{{width:100%;border-collapse:collapse;margin-bottom:6px}}
-.th td{{background:#1a2744;color:#fff;padding:11px 16px;font-size:13px;font-weight:600}}
-td{{padding:11px 16px;border-bottom:1px solid #eaecf4;font-size:14px}}
+.tbl-head td{{background:#1a2744;color:#fff;padding:11px 16px;font-size:13px;font-weight:600;letter-spacing:0.5px}}
+tr td{{padding:11px 16px;border-bottom:1px solid #eaecf4;font-size:14px}}
 tr:nth-child(even) td{{background:#f8f9fb}}
-td:first-child{{color:#555;width:38%}}
-.total td{{font-weight:700;font-size:15px;color:#1a2744;background:#eef1fa;border-top:2px solid #1a2744}}
-.company{{border:1px solid #dde1ee;border-radius:8px;padding:18px 22px;background:#fafbff;margin-top:20px}}
-.ctitle{{font-size:13px;font-weight:700;color:#1a2744;margin-bottom:10px}}
-.cbody{{font-size:13px;color:#555;line-height:2}}
-.note{{font-size:11.5px;color:#888;margin-top:8px}}
+tr td:first-child{{color:#555;width:38%}}
+.total-row td{{font-weight:700;font-size:15px;color:#1a2744;background:#eef1fa!important;border-top:2px solid #1a2744}}
+.note{{font-size:11.5px;color:#888;margin-top:8px;margin-bottom:24px;padding-left:2px}}
+.company{{border:1px solid #dde1ee;border-radius:8px;padding:18px 22px;background:#fafbff}}
+.company-title{{font-size:13px;font-weight:700;color:#1a2744;margin-bottom:10px;display:flex;align-items:center;gap:6px}}
+.company-title::before{{content:"";display:inline-block;width:4px;height:14px;background:#1a2744;border-radius:2px}}
+.company-body{{font-size:13px;color:#555;line-height:2}}
+@media print{{.print-area{{display:none}}}}
 </style></head><body>
-<div class="banner">
-<div class="bt">정 산 서</div>
-<div class="bs">SETTLEMENT STATEMENT (파마브로스 양식)</div>
-<div class="bd">발행일: {today}</div>
+<div class="print-area">
+<button class="btn" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>
+<span class="print-tip">※ 날짜·URL 머리글 제거: 인쇄 → 더보기 설정 → <b>머리글 및 바닥글</b> 체크 해제</span>
 </div>
-<div class="confirm">공구진행에 따른 정산내역을 확인합니다.</div>
+<div class="banner">
+<div class="banner-title">정 산 서</div>
+<div class="banner-sub">SETTLEMENT STATEMENT (파마브로스 양식)</div>
+<div class="banner-date">발행일: {today}</div>
+</div>
+<div class="body">
+<div class="confirm-box">공구진행에 따른 정산내역을 확인합니다.</div>
 <table>
-<tr class="th"><td colspan="2">정산 내역</td></tr>
+<tr class="tbl-head"><td colspan="2">정산 내역</td></tr>
 <tr><td>인플루언서</td><td>{title}</td></tr>
 {"<tr><td>제품명</td><td>" + product_name + "</td></tr>" if product_name else ""}
 <tr><td>진행기간</td><td>{date_from} ~ {date_to}</td></tr>
-<tr><td>합계금액</td><td>{total_payment:,}원</td></tr>
+<tr><td>총 결제금액</td><td>{total_payment:,}원</td></tr>
 <tr><td>수수료</td><td>{comm_pct:.1f}%</td></tr>
-<tr class="total"><td>정산금액</td><td>{settlement:,}원</td></tr>
+<tr class="total-row"><td>정산기준금액</td><td>{settlement:,}원</td></tr>
 </table>
+<p class="note">* 세금관련부분은 협의된 내용으로 처리됩니다. (ex) 부가세 포함, 프리랜서 공제 등</p>
 <div class="company">
-<div class="ctitle">정산 업체 정보</div>
-<div class="cbody">업체명&nbsp;&nbsp;&nbsp;주식회사 정담건강<br>사업자번호&nbsp;&nbsp;&nbsp;391-86-00889<br>주소&nbsp;&nbsp;&nbsp;경기도 시흥시 서울대학로278번길61, 431-2호</div>
+<div class="company-title">정산 업체 정보</div>
+<div class="company-body">업체명&nbsp;&nbsp;&nbsp;주식회사 정담건강<br>사업자번호&nbsp;&nbsp;&nbsp;391-86-00889<br>주소&nbsp;&nbsp;&nbsp;경기도 시흥시 서울대학로278번길61, 431-2호</div>
 </div>
-<p class="note">*세금관련부분은 협의된 내용으로 처리가 됩어 실제 입금금액은 위 정산금액과 일부 상이할수도있습니다. (ex&gt;부가세여부, 프리랜서공제&lt;3.3%공제된 금액입금&gt; 등)</p>
+</div>
 </body></html>"""
 
     try:
@@ -1360,20 +1376,10 @@ td:first-child{{color:#555;width:38%}}
         oauth_creds.refresh(GRequest())
         svc = build("drive", "v3", credentials=oauth_creds, cache_discovery=False)
 
-        # HTML → Google Doc (임시 변환)
-        media = MediaInMemoryUpload(html.encode("utf-8"), mimetype="text/html", resumable=False)
-        doc   = svc.files().create(
-            body={"name": f"_temp_{title}_정산서", "mimeType": "application/vnd.google-apps.document"},
-            media_body=media,
-        ).execute()
-
-        # Google Doc → PDF
-        pdf_bytes = svc.files().export(fileId=doc["id"], mimeType="application/pdf").execute()
-
-        # 파일명: 완료 폴더 xlsx 파일명 기반 (예: 두꺼비팜_6월30일_10시_최종_정산서.pdf)
+        # 파일명 결정 (완료 폴더 xlsx 기반)
         import re as _re
         safe_title = _re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-        pdf_name = f"{safe_title}_정산서.pdf"
+        html_name = f"{safe_title}_정산서.html"
         try:
             done_q = (
                 f"name='완료' and mimeType='application/vnd.google-apps.folder' "
@@ -1391,37 +1397,36 @@ td:first-child{{color:#555;width:38%}}
                     if xf["name"].startswith(safe_title + "_") and xf["name"].endswith(".xlsx"):
                         base = xf["name"][:-5]          # .xlsx 제거
                         base = base.replace("_업로드건", "")
-                        pdf_name = base + "_정산서.pdf"
+                        html_name = base + "_정산서.html"
                         break
         except Exception:
             pass
 
-        # '정산서' 폴더 내 동일 캠페인 기존 PDF 전부 삭제 (중복 방지)
+        # '정산서' 폴더 내 동일 캠페인 기존 파일 전부 삭제 (중복 방지)
         try:
             old_files = svc.files().list(
                 q=f"'{PHARMABROS_SETTLEMENT_FOLDER_ID}' in parents and trashed=false",
                 fields="files(id,name)",
             ).execute().get("files", [])
             for of in old_files:
-                if of["name"].startswith(safe_title + "_") or of["name"] == f"{title} 정산서.pdf":
+                if (of["name"].startswith(safe_title + "_")
+                        or of["name"] in (f"{title} 정산서.pdf", f"{title} 정산서.html")):
                     svc.files().update(fileId=of["id"], body={"trashed": True}).execute()
-                    print(f"  [파마브로스 정산서 PDF] 기존 파일 삭제: {of['name']}")
+                    print(f"  [파마브로스 정산서] 기존 파일 삭제: {of['name']}")
         except Exception:
             pass
 
-        pdf_media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
+        # HTML 파일 직접 Drive 저장 (CSS 완전 보존)
+        html_media = MediaInMemoryUpload(html.encode("utf-8"), mimetype="text/html", resumable=False)
         svc.files().create(
-            body={"name": pdf_name, "parents": [PHARMABROS_SETTLEMENT_FOLDER_ID]},
-            media_body=pdf_media,
+            body={"name": html_name, "parents": [PHARMABROS_SETTLEMENT_FOLDER_ID]},
+            media_body=html_media,
         ).execute()
 
-        # 임시 Google Doc 삭제
-        svc.files().delete(fileId=doc["id"]).execute()
-
-        print(f"  [파마브로스 정산서 PDF] '{title[:30]}' → {pdf_name} 업로드 완료")
+        print(f"  [파마브로스 정산서] '{title[:30]}' → {html_name} 업로드 완료")
 
     except Exception as e:
-        print(f"  [파마브로스 정산서 PDF 오류] {e}")
+        print(f"  [파마브로스 정산서 오류] {e}")
 
 
 # ── 사은품 추첨 ────────────────────────────────────────────
