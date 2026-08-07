@@ -1308,10 +1308,6 @@ def _upload_pharmabros_settlement_pdf(campaign, total_payment: int):
 @page{{size:A4;margin:12mm 15mm}}
 *{{box-sizing:border-box;margin:0;padding:0}}
 body{{font-family:"Malgun Gothic","맑은 고딕",sans-serif;background:#fff;color:#1a1a2e;max-width:680px;margin:0 auto;padding:0}}
-.print-area{{padding:12px 16px;background:#f8f9fa;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;gap:12px}}
-.btn{{background:#1a2744;color:#fff;border:none;padding:9px 22px;cursor:pointer;border-radius:4px;font-size:13px;letter-spacing:0.5px}}
-.btn:hover{{background:#2d3f6b}}
-.print-tip{{font-size:11px;color:#888;line-height:1.5}}
 .banner{{background:linear-gradient(135deg,#1a2744 0%,#2d3f6b 100%);padding:32px 40px 28px;position:relative;overflow:hidden}}
 .banner::after{{content:"";position:absolute;right:-20px;top:-20px;width:120px;height:120px;border-radius:50%;background:rgba(255,255,255,0.05)}}
 .banner-title{{color:#ffffff;font-size:30px;letter-spacing:6px;font-weight:700;margin-bottom:6px;text-shadow:0 1px 3px rgba(0,0,0,0.3)}}
@@ -1330,12 +1326,7 @@ tr td:first-child{{color:#555;width:38%}}
 .company-title{{font-size:13px;font-weight:700;color:#1a2744;margin-bottom:10px;display:flex;align-items:center;gap:6px}}
 .company-title::before{{content:"";display:inline-block;width:4px;height:14px;background:#1a2744;border-radius:2px}}
 .company-body{{font-size:13px;color:#555;line-height:2}}
-@media print{{.print-area{{display:none}}}}
 </style></head><body>
-<div class="print-area">
-<button class="btn" onclick="window.print()">🖨️ 인쇄 / PDF 저장</button>
-<span class="print-tip">※ 날짜·URL 머리글 제거: 인쇄 → 더보기 설정 → <b>머리글 및 바닥글</b> 체크 해제</span>
-</div>
 <div class="banner">
 <div class="banner-title">정 산 서</div>
 <div class="banner-sub">SETTLEMENT STATEMENT (파마브로스 양식)</div>
@@ -1379,7 +1370,7 @@ tr td:first-child{{color:#555;width:38%}}
         # 파일명 결정 (완료 폴더 xlsx 기반)
         import re as _re
         safe_title = _re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-        html_name = f"{safe_title}_정산서.html"
+        pdf_name = f"{safe_title}_정산서.pdf"
         try:
             done_q = (
                 f"name='완료' and mimeType='application/vnd.google-apps.folder' "
@@ -1397,7 +1388,7 @@ tr td:first-child{{color:#555;width:38%}}
                     if xf["name"].startswith(safe_title + "_") and xf["name"].endswith(".xlsx"):
                         base = xf["name"][:-5]          # .xlsx 제거
                         base = base.replace("_업로드건", "")
-                        html_name = base + "_정산서.html"
+                        pdf_name = base + "_정산서.pdf"
                         break
         except Exception:
             pass
@@ -1416,14 +1407,28 @@ tr td:first-child{{color:#555;width:38%}}
         except Exception:
             pass
 
-        # HTML 파일 직접 Drive 저장 (CSS 완전 보존)
-        html_media = MediaInMemoryUpload(html.encode("utf-8"), mimetype="text/html", resumable=False)
+        # playwright로 HTML → PDF 변환 (CSS gradient/border 등 완전 보존)
+        from playwright.sync_api import sync_playwright
+        import base64 as _b64
+        data_uri = "data:text/html;charset=utf-8;base64," + _b64.b64encode(html.encode("utf-8")).decode()
+        with sync_playwright() as pw:
+            browser = pw.chromium.launch(args=["--no-sandbox", "--disable-setuid-sandbox"])
+            page = browser.new_page()
+            page.goto(data_uri, wait_until="networkidle")
+            pdf_bytes = page.pdf(
+                format="A4",
+                print_background=True,
+                margin={"top": "10mm", "bottom": "10mm", "left": "15mm", "right": "15mm"},
+            )
+            browser.close()
+
+        pdf_media = MediaInMemoryUpload(pdf_bytes, mimetype="application/pdf", resumable=False)
         svc.files().create(
-            body={"name": html_name, "parents": [PHARMABROS_SETTLEMENT_FOLDER_ID]},
-            media_body=html_media,
+            body={"name": pdf_name, "parents": [PHARMABROS_SETTLEMENT_FOLDER_ID]},
+            media_body=pdf_media,
         ).execute()
 
-        print(f"  [파마브로스 정산서] '{title[:30]}' → {html_name} 업로드 완료")
+        print(f"  [파마브로스 정산서] '{title[:30]}' → {pdf_name} 업로드 완료")
 
     except Exception as e:
         print(f"  [파마브로스 정산서 오류] {e}")
