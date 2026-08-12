@@ -25,6 +25,10 @@ _NOISE_WORDS = frozenset({
     '단독', '특가', '할인', '기획', '이벤트', '한정', '세일',
     '신제품', '리뉴얼', '초특가', '최저가', '공구',
 })
+# 사은품·쇼핑백 등 부가물 키워드 — 이게 "제품 키"로 추출되면 단일제품으로 처리
+_ADDON_WORDS = frozenset({
+    '사은품', '쇼핑백', '증정', '증정품', '무료증정', '사은', '기프트', 'gift', '선물',
+})
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -101,7 +105,13 @@ def _extract_product_key(option: str) -> str:
     stripped = re.sub(r'\d+\s*(?:BOX|박스|bx|개입|구|정|캡슐|세트|팩)', '', stripped, flags=re.IGNORECASE)
     stripped = re.sub(r'[\(\[\（].*?[\)\]\）]', '', stripped)
     stripped = re.sub(r'\d+', '', stripped).strip()
-    return stripped if len(stripped) >= 2 else ''
+    result = stripped if len(stripped) >= 2 else ''
+    # 부가물 키워드(사은품·쇼핑백 등)만 남은 경우 → 단일제품 옵션으로 처리
+    if result:
+        clean = result.replace('+', '').replace(' ', '').lower()
+        if any(aw in clean for aw in _ADDON_WORDS):
+            return ''
+    return result
 
 
 def _short_product_label(key: str) -> str:
