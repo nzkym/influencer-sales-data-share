@@ -112,7 +112,7 @@ ORDER_STATUS_KO = {
     "COLLECT_WAITED":            "수거대기",
     "CANCEL_REQUESTED":          "취소요청",
     "RETURN_INITIATED":          "반품신청",
-    "RETURNED":                  "반품완료",
+    "RETURNED":                  "반품",
     "CANCELED":                  "취소완료",
 }
 
