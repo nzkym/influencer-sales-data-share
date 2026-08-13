@@ -1054,7 +1054,12 @@ def _auto_save_pharmabros_prices(campaign):
         print(f"  [자동가격저장] {campaign['title'][:20]}: 유효 주문 없음")
         return
 
-    prices = {opt: Counter(vals).most_common(1)[0][0] for opt, vals in opt_prices.items()}
+    prices = {}
+    for opt, vals in opt_prices.items():
+        unique = set(vals)
+        if len(unique) > 1:
+            print(f"  ⚠️ [단가불일치] '{opt}': {sorted(unique)} → 최댓값({max(vals)}) 선택")
+        prices[opt] = max(vals)  # 불일치 시 최댓값(정가에 가까운 값) 강제 선택
     price_file.parent.mkdir(exist_ok=True)
     price_file.write_text(json.dumps(prices, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"  [자동가격저장] {campaign['title'][:20]}: {prices}")
@@ -1089,16 +1094,18 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
             continue
 
         qty = int(r.get("주문수량", 0) or 0)
-        # xlsx에 단가 컬럼이 있으면 그걸 우선 사용, 없으면 JSON 고정가격 적용
-        raw_price = r.get("단가", 0) or 0
-        try:
-            unit_price = int(raw_price)
-        except (ValueError, TypeError):
-            unit_price = 0  # 엑셀 수식 문자열(=SUM(...) 등)은 무시
-        if not unit_price and fixed_prices:
+        # API 기반 정가(fixed_prices)를 항상 우선 사용, 없을 때만 xlsx 단가 참조
+        unit_price = 0
+        if fixed_prices:
             unit_price = _match_option_price(str(r.get("옵션", "")), fixed_prices)
-            if unit_price:
-                r["단가"] = unit_price
+        if not unit_price:
+            raw_price = r.get("단가", 0) or 0
+            try:
+                unit_price = int(raw_price)
+            except (ValueError, TypeError):
+                unit_price = 0
+        if unit_price:
+            r["단가"] = unit_price
 
         total += unit_price * qty
 
