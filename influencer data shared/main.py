@@ -1855,6 +1855,162 @@ def main():
         print(f"\n완료: {uploaded}개 업로드")
         return
 
+    # 파마브로스 주문상태 갱신: python3 main.py --refresh-status
+    # 완료폴더 xlsx의 주문상태 컬럼만 네이버 API로 재조회해서 업데이트 (나머지 컬럼 절대 변경 안 함)
+    if "--refresh-status" in sys.argv:
+        print("\n[파마브로스 주문상태 갱신] 완료폴더 xlsx 주문상태 재조회 중...\n")
+        if not all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+                    PHARMABROS_OAUTH_REFRESH_TOKEN, PHARMABROS_DRIVE_FOLDER_ID]):
+            print("  ⚠️  OAuth2 설정 없음")
+            return
+        try:
+            from googleapiclient.http import MediaIoBaseUpload as _MediaUpload
+            svc = pharmabros._drive_service_oauth(
+                PHARMABROS_OAUTH_CLIENT_ID,
+                PHARMABROS_OAUTH_CLIENT_SECRET,
+                PHARMABROS_OAUTH_REFRESH_TOKEN,
+            )
+            # 완료 폴더 ID 조회
+            done_folders = svc.files().list(
+                q=f"'{PHARMABROS_DRIVE_FOLDER_ID}' in parents and name='완료' and "
+                  "mimeType='application/vnd.google-apps.folder' and trashed=false",
+                fields="files(id)",
+            ).execute().get("files", [])
+            if not done_folders:
+                print("  ⚠️  완료 폴더 없음")
+                return
+            done_folder_id = done_folders[0]["id"]
+
+            creds   = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+            client  = gspread.authorize(creds)
+            sh_id   = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+            rows    = client.open_by_key(sh_id).sheet1.get_all_records()
+            KST     = timezone(timedelta(hours=9))
+            today   = datetime.now(KST).date()
+            refreshed = 0
+
+            for row in rows:
+                k_val = re.sub(r"\s+", "", str(row.get("파마브로스파일공유여부", "")))
+                if k_val != "파마브로스파일공유":
+                    continue
+                title     = str(row.get("제목", "")).strip()
+                end_str   = str(row.get("종료일자", "")).strip()
+                store     = str(row.get("스토어", "")).strip().lower()
+                url       = str(row.get("상품링크", "")).strip()
+                if not all([title, end_str, store, url]) or store not in STORE_CREDENTIALS:
+                    continue
+                try:
+                    end_date = parse_date(end_str)
+                except ValueError:
+                    continue
+                # 종료 후 10일 이상 지난 건만 처리
+                if (today - end_date).days < 10:
+                    print(f"  스킵 (종료 {(today-end_date).days}일, 10일 미만): {title[:30]}")
+                    continue
+                api_id, api_secret = STORE_CREDENTIALS[store]
+                if not api_id or not api_secret:
+                    continue
+
+                safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+                # 완료 폴더에서 해당 파일 찾기
+                files = svc.files().list(
+                    q=f"'{done_folder_id}' in parents and trashed=false",
+                    fields="files(id,name)",
+                    pageSize=100,
+                ).execute().get("files", [])
+                target = next(
+                    (f for f in files
+                     if f["name"].startswith(safe_prefix) and f["name"].endswith(".xlsx")),
+                    None,
+                )
+                if not target:
+                    print(f"  파일 없음 (완료폴더): {title[:30]}")
+                    continue
+
+                print(f"  처리 중: {target['name']}")
+                import io as _io
+                from openpyxl import load_workbook as _load_wb
+                content = svc.files().get_media(fileId=target["id"]).execute()
+                wb = _load_wb(filename=_io.BytesIO(content))
+                ws = wb.active
+
+                # 헤더 위치 파악
+                header_row_idx = col_oid = col_status = None
+                for hrow in ws.iter_rows(min_row=1, max_row=10):
+                    cells = [str(c.value or "").strip() for c in hrow]
+                    if "주문번호" in cells:
+                        header_row_idx = hrow[0].row
+                        col_oid    = cells.index("주문번호") + 1
+                        col_status = cells.index("주문상태") + 1 if "주문상태" in cells else None
+                        break
+                if not header_row_idx or not col_oid or not col_status:
+                    print(f"    헤더 파악 실패, 스킵")
+                    continue
+
+                # 주문번호 수집
+                order_ids  = []
+                data_rows  = []
+                for drow in ws.iter_rows(min_row=header_row_idx + 1):
+                    oid = str(drow[col_oid - 1].value or "").strip()
+                    if oid:
+                        order_ids.append(oid)
+                        data_rows.append(drow)
+
+                # API 일괄 조회 (100개씩)
+                status_map = {}
+                token = naver_api._get_access_token(api_id, api_secret)
+                headers_api = {"Authorization": f"Bearer {token}"}
+                for start in range(0, len(order_ids), 100):
+                    chunk = order_ids[start:start + 100]
+                    resp  = _requests.post(
+                        f"{naver_api.BASE_URL}/external/v1/pay-order/seller/product-orders/query",
+                        headers={**headers_api, "Content-Type": "application/json"},
+                        json={"productOrderIds": chunk},
+                        timeout=30,
+                    )
+                    if resp.status_code != 200:
+                        print(f"    query 실패: {resp.status_code}")
+                        continue
+                    for order in resp.json().get("data", []):
+                        po  = order.get("productOrder", {})
+                        oid = str(po.get("productOrderId", ""))
+                        raw = po.get("productOrderStatus", "")
+                        status_map[oid] = naver_api.ORDER_STATUS_KO.get(raw, raw)
+
+                # 주문상태 컬럼만 업데이트 (절대 다른 컬럼 건드리지 않음)
+                updated = 0
+                for drow in data_rows:
+                    oid  = str(drow[col_oid - 1].value or "").strip()
+                    if oid not in status_map:
+                        continue
+                    cell = drow[col_status - 1]
+                    if cell.value != status_map[oid]:
+                        cell.value = status_map[oid]
+                        updated += 1
+
+                if updated == 0:
+                    print(f"    변경 없음")
+                    continue
+
+                out = _io.BytesIO()
+                wb.save(out)
+                out.seek(0)
+                svc.files().update(
+                    fileId=target["id"],
+                    media_body=_MediaUpload(
+                        out,
+                        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    ),
+                ).execute()
+                print(f"    ✅ {updated}건 업데이트 → Drive 업로드 완료")
+                refreshed += 1
+
+        except Exception as e:
+            print(f"  오류: {e}")
+            import traceback; traceback.print_exc()
+        print(f"\n완료: {refreshed}개 파일 업데이트")
+        return
+
     # 파마브로스 테스트 모드: 시간 체크 없이 파마브로스만 즉시 실행
     if "--test-pharmabros" in sys.argv:
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
