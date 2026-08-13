@@ -1155,8 +1155,14 @@ def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list):
                 new_rows.append(r)
 
         for row in xlsx_rows:
-            unit_price = int(row.get("단가", 0) or 0)
-            qty = int(row.get("주문수량", 0) or 0)
+            try:
+                unit_price = int(row.get("단가", 0) or 0)
+            except (ValueError, TypeError):
+                unit_price = 0
+            try:
+                qty = int(row.get("주문수량", 0) or 0)
+            except (ValueError, TypeError):
+                qty = 0
             new_rows.append([
                 title,
                 row.get("주문번호", ""),
