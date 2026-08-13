@@ -1090,7 +1090,11 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
 
         qty = int(r.get("주문수량", 0) or 0)
         # xlsx에 단가 컬럼이 있으면 그걸 우선 사용, 없으면 JSON 고정가격 적용
-        unit_price = int(r.get("단가", 0) or 0)
+        raw_price = r.get("단가", 0) or 0
+        try:
+            unit_price = int(raw_price)
+        except (ValueError, TypeError):
+            unit_price = 0  # 엑셀 수식 문자열(=SUM(...) 등)은 무시
         if not unit_price and fixed_prices:
             unit_price = _match_option_price(str(r.get("옵션", "")), fixed_prices)
             if unit_price:
