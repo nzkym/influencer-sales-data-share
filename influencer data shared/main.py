@@ -1903,9 +1903,12 @@ def main():
                     end_date = parse_date(end_str)
                 except ValueError:
                     continue
-                # 종료 후 10일 이상 지난 건만 처리
-                if (today - end_date).days < 10:
-                    print(f"  스킵 (종료 {(today-end_date).days}일, 10일 미만): {title[:30]}")
+                # 종료 후 10~20일 사이에만 처리 (이후엔 영구 스킵)
+                days_after = (today - end_date).days
+                if days_after < 10:
+                    print(f"  스킵 (종료 {days_after}일, 10일 미만): {title[:30]}")
+                    continue
+                if days_after > 20:
                     continue
                 api_id, api_secret = STORE_CREDENTIALS[store]
                 if not api_id or not api_secret:
