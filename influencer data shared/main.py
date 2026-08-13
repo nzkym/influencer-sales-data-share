@@ -38,6 +38,7 @@ STORE_CREDENTIALS = {
     "nutone":   (os.getenv("NUTONE_CLIENT_ID"),   os.getenv("NUTONE_CLIENT_SECRET")),
     "jdhealth": (os.getenv("JDHEALTH_CLIENT_ID"), os.getenv("JDHEALTH_CLIENT_SECRET")),
     "nutpet":   (os.getenv("NUTPET_CLIENT_ID"),   os.getenv("NUTPET_CLIENT_SECRET")),
+    "nutmedi":  (os.getenv("NUTMEDI_CLIENT_ID"),  os.getenv("NUTMEDI_CLIENT_SECRET")),
 }
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -1042,10 +1043,10 @@ def _auto_save_pharmabros_prices(campaign):
     opt_prices: dict = {}
     for o in orders:
         status = str(o.get("주문상태", ""))
-        if any(k in status for k in ("취소", "반품")) or any(k in status.upper() for k in ("CANCEL", "RETURN")):
+        if "취소" in status or "CANCEL" in status.upper():
             continue
         opt = str(o.get("옵션", "")).strip()
-        amt = int(o.get("단가", 0) or 0)   # naver_api: totalPaymentAmount // qty
+        amt = int(o.get("단가", 0) or 0)
         if opt and amt > 0:
             opt_prices.setdefault(opt, []).append(amt)
 
@@ -1084,7 +1085,7 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
     total = 0
     for r in rows:
         status = str(r.get("주문상태", ""))
-        if "취소" in status or "반품" in status or "CANCEL" in status.upper() or "RETURN" in status.upper():
+        if "취소" in status or "CANCEL" in status.upper():
             continue
 
         qty = int(r.get("주문수량", 0) or 0)
@@ -1523,9 +1524,9 @@ def _run_saeunpum_lottery(force: bool = False):
         except Exception:
             continue
 
-        # 날짜 조건 체크
+        # 날짜 조건 체크 (업체가 사은품처리를 늦게 요청하는 경우 고려 → 최대 30일)
         days_since_end = (today - end_date).days
-        if not force and (days_since_end < 1 or days_since_end > 7):
+        if not force and (days_since_end < 1 or days_since_end > 30):
             continue
 
         # 종료 바로 다음날(days_since_end==1)은 오전 7시 이후에만 처리
@@ -1556,8 +1557,13 @@ def _run_saeunpum_lottery(force: bool = False):
             continue
 
         # I열 내용 포맷: "2026.7.21~27_띱약사_상품명"
+        # 종료월이 시작월과 다를 경우(월 넘어감) 월.일 형식으로 표시
         start_fmt = f"{start_date.year}.{start_date.month}.{start_date.day}"
-        i_col_prefix = f"{start_fmt}~{end_date.day}_{title}_"
+        if end_date.month == start_date.month:
+            end_part = str(end_date.day)
+        else:
+            end_part = f"{end_date.month}.{end_date.day}"
+        i_col_prefix = f"{start_fmt}~{end_part}_{title}_"
 
         print(f"\n  [사은품] '{title[:30]}' → {saeunpum_n}명 추첨 시작...")
 
@@ -1837,6 +1843,11 @@ def main():
         print("\n[테스트 모드] 파마브로스 파일공유 강제 실행\n")
         _run_pharmabros_if_needed(force=True)
         _backfill_pharmabros_settlements()
+        return
+
+    # 사은품 추첨: 날짜 조건 포함 (로컬 오전 5:30 스케줄러 전용)
+    if "--lottery" in sys.argv:
+        _run_saeunpum_lottery()
         return
 
     # 사은품 추첨 테스트: 날짜 체크 없이 즉시 실행

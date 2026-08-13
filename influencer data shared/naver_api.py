@@ -187,9 +187,10 @@ def _get_option_names(headers: dict, order_ids: list) -> tuple:
             oid = str(po.get("productOrderId", ""))
             option = po.get("productOption") or ""
             result[oid] = option
-            pay_amt = int(po.get("totalPaymentAmount") or po.get("productAmount") or 0)
-            qty_val = int(po.get("quantity") or 1)
-            price_map[oid] = pay_amt // qty_val if qty_val else pay_amt
+            init_amt  = int(po.get("initialProductAmount") or 0)
+            imm_disc  = int(po.get("initialProductImmediateDiscountAmount") or 0)
+            qty_val   = int(po.get("quantity") or 1)
+            price_map[oid] = (init_amt - imm_disc) // qty_val if qty_val else (init_amt - imm_disc)
             if not product_name:
                 product_name = po.get("productName") or ""
     return result, product_name, price_map
