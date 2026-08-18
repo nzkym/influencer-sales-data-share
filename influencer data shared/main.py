@@ -1076,6 +1076,8 @@ def _calc_pharmabros_settlement(campaign) -> tuple:
         refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
         folder_id=PHARMABROS_DRIVE_FOLDER_ID,
         title=campaign["title"],
+        date_from=campaign.get("date_from", ""),
+        date_to=campaign.get("date_to", ""),
     )
     if not rows:
         print(f"  [파마브로스정산] Drive 파일 없음: {campaign['title'][:30]}")
@@ -1266,6 +1268,117 @@ def _backfill_pharmabros_settlements():
         print(f"  [파마브로스 백필] {processed}개 캠페인 정산 완료")
 
 
+def _pharmabros_backfill_xlsx():
+    """Drive에 파일이 없는 종료된 파마브로스 캠페인의 xlsx를 재업로드한다.
+    날짜 범위 포함 prefix(0810~0816_)로만 파일 존재 여부를 판단하므로,
+    같은 이름의 다른 날짜 캠페인 파일과 혼동하지 않는다.
+    """
+    if not MASTER_SHEET_URL:
+        return
+    try:
+        creds  = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
+        cl     = gspread.authorize(creds)
+        sh_id  = re.search(r"/spreadsheets/d/([a-zA-Z0-9_-]+)", MASTER_SHEET_URL).group(1)
+        rows   = cl.open_by_key(sh_id).sheet1.get_all_records()
+    except Exception as e:
+        print(f"  [backfill] 시트 읽기 실패: {e}")
+        return
+
+    if not all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+                PHARMABROS_OAUTH_REFRESH_TOKEN, PHARMABROS_DRIVE_FOLDER_ID]):
+        print("  [backfill] OAuth2 설정 없음")
+        return
+
+    try:
+        svc = pharmabros._drive_service_oauth(
+            PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+            PHARMABROS_OAUTH_REFRESH_TOKEN,
+        )
+        main_files = svc.files().list(
+            q=f"'{PHARMABROS_DRIVE_FOLDER_ID}' in parents and trashed=false",
+            fields="files(name)", pageSize=200,
+        ).execute().get("files", [])
+        done_fid = None
+        _df = svc.files().list(
+            q=f"'{PHARMABROS_DRIVE_FOLDER_ID}' in parents and name='완료' and "
+              "mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id)",
+        ).execute().get("files", [])
+        done_files = []
+        if _df:
+            done_fid = _df[0]["id"]
+            done_files = svc.files().list(
+                q=f"'{done_fid}' in parents and trashed=false",
+                fields="files(name)", pageSize=200,
+            ).execute().get("files", [])
+        all_drive_names = {f["name"] for f in main_files + done_files}
+    except Exception as e:
+        print(f"  [backfill] Drive 파일 목록 조회 실패: {e}")
+        return
+
+    KST     = timezone(timedelta(hours=9))
+    today   = datetime.now(KST).date()
+    processed = 0
+
+    for row in rows:
+        k_val = re.sub(r"\s+", "", str(row.get("파마브로스파일공유여부", "")))
+        if k_val != "파마브로스파일공유":
+            continue
+        title     = str(row.get("제목", "")).strip()
+        start_str = str(row.get("시작일자", "")).strip()
+        end_str   = str(row.get("종료일자", "")).strip()
+        url       = str(row.get("상품링크", "")).strip()
+        store     = str(row.get("스토어", "")).strip().lower()
+        if not all([title, start_str, end_str, url, store]) or store not in STORE_CREDENTIALS:
+            continue
+        try:
+            start_date = parse_date(start_str)
+            end_date   = parse_date(end_str)
+        except ValueError:
+            continue
+        if end_date >= today:
+            continue
+        api_id, api_secret = STORE_CREDENTIALS[store]
+        if not api_id or not api_secret:
+            continue
+        try:
+            product_no = extract_product_no(url)
+        except ValueError:
+            continue
+
+        date_from   = start_date.strftime("%Y-%m-%d")
+        date_to     = end_date.strftime("%Y-%m-%d")
+        safe_title  = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+        date_prefix = f"{safe_title}_{start_date.strftime('%m%d')}~{end_date.strftime('%m%d')}_"
+
+        # 날짜 범위 포함 파일 존재 확인만 (다른 날짜 캠페인 파일과 혼동 방지)
+        has_file = any(n.startswith(date_prefix) and n.endswith(".xlsx") for n in all_drive_names)
+        if has_file:
+            print(f"  [backfill] 있음, 스킵: {title[:30]} ({date_from}~{date_to})")
+            continue
+
+        print(f"  [backfill] 없음 → 재업로드: {title[:30]} ({date_from}~{date_to})")
+        campaign = {
+            "title": title, "product_no": product_no, "url": url,
+            "date_from": date_from, "date_to": date_to,
+            "api_id": api_id, "api_secret": api_secret, "is_final": True,
+        }
+        try:
+            pharmabros.run_pharmabros(
+                campaign=campaign,
+                credentials_path=CREDENTIALS_PATH,
+                oauth_client_id=PHARMABROS_OAUTH_CLIENT_ID,
+                oauth_client_secret=PHARMABROS_OAUTH_CLIENT_SECRET,
+                oauth_refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
+                drive_folder_id=PHARMABROS_DRIVE_FOLDER_ID,
+            )
+            processed += 1
+        except Exception as e:
+            print(f"  [backfill] 오류 {title[:30]}: {e}")
+
+    print(f"\n[backfill] 완료: {processed}개 재업로드")
+
+
 def _upload_pharmabros_settlement_pdf(campaign, total_payment: int):
     """파마브로스 정산서 HTML 생성 후 Drive '정산서' 폴더에 자동 업로드.
     total_payment = 파마브로스 고정 옵션가 기준 합계금액 (취소 제외).
@@ -1388,7 +1501,10 @@ tr td:first-child{{color:#555;width:38%}}
         # 파일명 결정 (완료 폴더 xlsx 기반)
         import re as _re
         safe_title = _re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-        pdf_name = f"{safe_title}_정산서.pdf"
+        _df = str(campaign.get("date_from", "")).replace("-", "")
+        _dt = str(campaign.get("date_to", "")).replace("-", "")
+        _date_range = f"{_df[4:8]}~{_dt[4:8]}_" if len(_df) >= 8 and len(_dt) >= 8 else ""
+        pdf_name = f"{safe_title}_{_date_range}정산서.pdf"
         try:
             done_q = (
                 f"name='완료' and mimeType='application/vnd.google-apps.folder' "
@@ -1402,23 +1518,33 @@ tr td:first-child{{color:#555;width:38%}}
                     fields="files(name)",
                     orderBy="createdTime desc",
                 ).execute().get("files", [])
-                for xf in xlsx_files:
-                    if xf["name"].startswith(safe_title + "_") and xf["name"].endswith(".xlsx"):
-                        base = xf["name"][:-5]          # .xlsx 제거
-                        base = base.replace("_업로드건", "")
-                        pdf_name = base + "_정산서.pdf"
+                # 날짜 범위 포함 prefix 우선 검색, 없으면 기존 prefix 폴백
+                _prefixes = [f"{safe_title}_{_date_range}"] if _date_range else []
+                _prefixes.append(f"{safe_title}_")
+                target_xlsx_name = None
+                for _pref in _prefixes:
+                    for xf in xlsx_files:
+                        if xf["name"].startswith(_pref) and xf["name"].endswith(".xlsx"):
+                            target_xlsx_name = xf["name"]
+                            break
+                    if target_xlsx_name:
                         break
+                if target_xlsx_name:
+                    base = target_xlsx_name[:-5]          # .xlsx 제거
+                    base = base.replace("_최종_업로드건", "").replace("_업로드건", "")
+                    pdf_name = base + "_정산서.pdf"
         except Exception:
             pass
 
-        # '정산서' 폴더 내 동일 캠페인 기존 파일 전부 삭제 (중복 방지)
+        # '정산서' 폴더 내 동일 캠페인·날짜 범위 기존 파일만 삭제 (중복 방지)
         try:
+            _del_prefix = f"{safe_title}_{_date_range}" if _date_range else f"{safe_title}_"
             old_files = svc.files().list(
                 q=f"'{PHARMABROS_SETTLEMENT_FOLDER_ID}' in parents and trashed=false",
                 fields="files(id,name)",
             ).execute().get("files", [])
             for of in old_files:
-                if (of["name"].startswith(safe_title + "_")
+                if (of["name"].startswith(_del_prefix)
                         or of["name"] in (f"{title} 정산서.pdf", f"{title} 정산서.html")):
                     svc.files().update(fileId=of["id"], body={"trashed": True}).execute()
                     print(f"  [파마브로스 정산서] 기존 파일 삭제: {of['name']}")
@@ -1703,6 +1829,8 @@ def _run_pharmabros_if_needed(force: bool = False):
                     refresh_token=PHARMABROS_OAUTH_REFRESH_TOKEN,
                     folder_id=PHARMABROS_DRIVE_FOLDER_ID,
                     title=title,
+                    date_from=campaign.get("date_from", ""),
+                    date_to=campaign.get("date_to", ""),
                 )
                 if deleted:
                     print(f"  [파마브로스] 📁 '{title[:30]}' 완료 폴더 이동 완료: {deleted}")
@@ -1894,13 +2022,15 @@ def main():
                 if k_val != "파마브로스파일공유":
                     continue
                 title     = str(row.get("제목", "")).strip()
+                start_str = str(row.get("시작일자", "")).strip()
                 end_str   = str(row.get("종료일자", "")).strip()
                 store     = str(row.get("스토어", "")).strip().lower()
                 url       = str(row.get("상품링크", "")).strip()
                 if not all([title, end_str, store, url]) or store not in STORE_CREDENTIALS:
                     continue
                 try:
-                    end_date = parse_date(end_str)
+                    start_date = parse_date(start_str) if start_str else None
+                    end_date   = parse_date(end_str)
                 except ValueError:
                     continue
                 # 종료 후 10~20일 사이에만 처리 (이후엔 영구 스킵)
@@ -1914,18 +2044,24 @@ def main():
                 if not api_id or not api_secret:
                     continue
 
-                safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
-                # 완료 폴더에서 해당 파일 찾기
+                safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+                _dr = f"{start_date.strftime('%m%d')}~{end_date.strftime('%m%d')}_" if start_date else ""
+                _pfxs = ([f"{safe_title}_{_dr}"] if _dr else []) + [f"{safe_title}_"]
+                # 완료 폴더에서 해당 파일 찾기 (날짜 범위 포함 prefix 우선)
                 files = svc.files().list(
                     q=f"'{done_folder_id}' in parents and trashed=false",
                     fields="files(id,name)",
                     pageSize=100,
                 ).execute().get("files", [])
-                target = next(
-                    (f for f in files
-                     if f["name"].startswith(safe_prefix) and f["name"].endswith(".xlsx")),
-                    None,
-                )
+                target = None
+                for _pf in _pfxs:
+                    target = next(
+                        (f for f in files
+                         if f["name"].startswith(_pf) and f["name"].endswith(".xlsx")),
+                        None,
+                    )
+                    if target:
+                        break
                 if not target:
                     print(f"  파일 없음 (완료폴더): {title[:30]}")
                     continue
@@ -2012,6 +2148,12 @@ def main():
             print(f"  오류: {e}")
             import traceback; traceback.print_exc()
         print(f"\n완료: {refreshed}개 파일 업데이트")
+        return
+
+    # 파마브로스 xlsx 재업로드: Drive에 파일 없는 종료 캠페인 처리
+    if "--pharmabros-backfill-xlsx" in sys.argv:
+        print("\n[파마브로스 xlsx 재업로드] Drive에 파일 없는 종료 캠페인 처리 중...\n")
+        _pharmabros_backfill_xlsx()
         return
 
     # 파마브로스 테스트 모드: 시간 체크 없이 파마브로스만 즉시 실행

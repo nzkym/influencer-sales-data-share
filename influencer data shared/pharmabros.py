@@ -101,6 +101,15 @@ def _parse_date(s: str):
     return date(int(parts[0]), int(parts[1]), int(parts[2]))
 
 
+def _date_range_str(date_from: str, date_to: str) -> str:
+    """'0810~0816_' 형식 prefix 반환. 날짜 없으면 빈 문자열."""
+    if date_from and date_to:
+        df = date_from.replace("-", "")[4:8]
+        dt = date_to.replace("-", "")[4:8]
+        return f"{df}~{dt}_"
+    return ""
+
+
 # ── 엑셀 파일 생성 ────────────────────────────────────────
 def _col_width(ws, col: int, width: float):
     ws.column_dimensions[get_column_letter(col)].width = width
@@ -253,10 +262,13 @@ def upload_to_drive(
     file_bytes: bytes,
     file_name: str,
     title: str = "",
+    date_from: str = "",
+    date_to: str = "",
 ) -> str:
     """
     사장님 구글 드라이브 폴더에 엑셀 파일 업로드.
-    같은 캠페인(title_ 로 시작하는 파일)은 업로드 전에 모두 삭제.
+    같은 캠페인·같은 날짜 범위 파일만 삭제 (date_from/date_to로 구분).
+    같은 이름의 다른 캠페인 파일은 건드리지 않음.
     """
     service = _drive_service_oauth(client_id, client_secret, refresh_token)
     media   = MediaIoBaseUpload(
@@ -264,9 +276,11 @@ def upload_to_drive(
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    # 같은 캠페인 기존 파일 전부 삭제 (title_ 로 시작하는 파일 모두)
+    # 같은 캠페인·같은 날짜 범위 기존 파일만 삭제
     if title:
-        safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+        safe_title  = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+        date_range  = _date_range_str(date_from, date_to)
+        safe_prefix = f"{safe_title}_{date_range}"
         all_in_folder = service.files().list(
             q=f"'{folder_id}' in parents and trashed=false",
             fields="files(id,name)",
@@ -293,17 +307,19 @@ def make_filenames(title: str, is_final: bool, date_from: str = "", date_to: str
     """
     업로드할 파일명 반환 (항상 1개).
 
-    정기 업로드: 힐링희_5월20일_14시_업로드건.xlsx
-    최종 업로드: 힐링희_5월25일_10시_최종_업로드건.xlsx
+    정기 업로드: 힐링희_0520~0525_5월20일_14시_업로드건.xlsx
+    최종 업로드: 힐링희_0520~0525_5월25일_10시_최종_업로드건.xlsx
+    날짜 범위를 포함해 같은 이름의 캠페인이 여러 개 있을 때 파일이 덮어쓰이지 않도록 함.
     """
-    now  = now_kst()
-    safe = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-    ts   = f"{now.month}월{now.day}일_{now.hour}시"
+    now        = now_kst()
+    safe       = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+    ts         = f"{now.month}월{now.day}일_{now.hour}시"
+    date_range = _date_range_str(date_from, date_to)
 
     if is_final:
-        return [f"{safe}_{ts}_최종_업로드건.xlsx"]
+        return [f"{safe}_{date_range}{ts}_최종_업로드건.xlsx"]
     else:
-        return [f"{safe}_{ts}_업로드건.xlsx"]
+        return [f"{safe}_{date_range}{ts}_업로드건.xlsx"]
 
 
 # ── 메인 실행 함수 ────────────────────────────────────────
@@ -375,7 +391,7 @@ def run_pharmabros(
     # 파일명: 제목_시작일~종료일_시각.xlsx
     file_name = make_filenames(title, is_final, date_from, query_to)[0]
 
-    # 구글 드라이브 업로드 (사장님 계정) — 기존 파일 삭제 후 신규 업로드
+    # 구글 드라이브 업로드 (사장님 계정) — 같은 날짜 범위 파일만 삭제 후 신규 업로드
     file_url = upload_to_drive(
         client_id=oauth_client_id,
         client_secret=oauth_client_secret,
@@ -384,6 +400,8 @@ def run_pharmabros(
         file_bytes=excel_bytes,
         file_name=file_name,
         title=title,
+        date_from=date_from,
+        date_to=date_to,
     )
 
     folder_url = f"https://drive.google.com/drive/folders/{drive_folder_id}"
@@ -398,15 +416,25 @@ def read_xlsx_rows_from_drive(
     refresh_token: str,
     folder_id: str,
     title: str,
+    date_from: str = "",
+    date_to: str = "",
 ) -> list:
     """드라이브 폴더(+완료 하위폴더)에서 해당 캠페인 xlsx를 읽어 전체 행 반환.
+    날짜 범위 포함 prefix 우선 검색, 없으면 기존 prefix로 폴백.
     반환: [{"주문번호":..., "주문일시":..., "주문상태":..., "옵션":..., "주문수량":..., "단가":..., "결제금액":...}, ...]
     """
     import io
     from openpyxl import load_workbook
 
-    service     = _drive_service_oauth(client_id, client_secret, refresh_token)
-    safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+    service    = _drive_service_oauth(client_id, client_secret, refresh_token)
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+    date_range = _date_range_str(date_from, date_to)
+
+    # 날짜 범위 포함 prefix 우선, 없으면 기존 prefix 폴백
+    prefixes = []
+    if date_range:
+        prefixes.append(f"{safe_title}_{date_range}")
+    prefixes.append(f"{safe_title}_")
 
     # 메인 폴더 + 완료 폴더 모두 검색
     search_folders = [folder_id]
@@ -427,9 +455,12 @@ def read_xlsx_rows_from_drive(
             fields="files(id,name,createdTime)",
             orderBy="createdTime desc",
         ).execute().get("files", [])
-        for f in files:
-            if f["name"].startswith(safe_prefix) and f["name"].endswith(".xlsx"):
-                target = f
+        for prefix in prefixes:
+            for f in files:
+                if f["name"].startswith(prefix) and f["name"].endswith(".xlsx"):
+                    target = f
+                    break
+            if target:
                 break
         if target:
             break
@@ -500,10 +531,14 @@ def delete_campaign_files(
     refresh_token: str,
     folder_id: str,
     title: str,
+    date_from: str = "",
+    date_to: str = "",
 ) -> list:
-    """드라이브 폴더에서 해당 캠페인 파일을 '완료' 폴더로 이동. 이동된 파일명 목록 반환."""
-    service     = _drive_service_oauth(client_id, client_secret, refresh_token)
-    safe_prefix = re.sub(r'[\\/:*?"<>|]', "_", title).strip() + "_"
+    """드라이브 폴더에서 해당 캠페인(날짜 범위 기준) 파일을 '완료' 폴더로 이동. 이동된 파일명 목록 반환."""
+    service    = _drive_service_oauth(client_id, client_secret, refresh_token)
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+    date_range = _date_range_str(date_from, date_to)
+    safe_prefix = f"{safe_title}_{date_range}"
 
     all_files = service.files().list(
         q=f"'{folder_id}' in parents and trashed=false",
