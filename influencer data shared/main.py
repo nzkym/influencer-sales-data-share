@@ -972,6 +972,7 @@ def run_once():
 
     # ── 파마브로스 파일공유 ───────────────────────────────
     _run_pharmabros_if_needed()
+    _pharmabros_drive_health_check()
 
     # ── 파마브로스 정산 백필 (종료 캠페인 중 미처리건) ────
     _backfill_pharmabros_settlements()
@@ -1796,6 +1797,52 @@ def _run_saeunpum_lottery(force: bool = False):
         print("  [사은품 추첨] 처리할 캠페인 없음 (날짜 조건 미충족 or 이미 처리됨)")
     else:
         print(f"  [사은품 추첨] 완료: {processed}개 캠페인 처리")
+
+
+def _pharmabros_drive_health_check():
+    """Drive 파일 중복 자동 감지·정리. 문제 발견 시 텔레그램 경고."""
+    if not all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+                PHARMABROS_OAUTH_REFRESH_TOKEN, PHARMABROS_DRIVE_FOLDER_ID]):
+        return
+    try:
+        svc = pharmabros._drive_service_oauth(
+            PHARMABROS_OAUTH_CLIENT_ID,
+            PHARMABROS_OAUTH_CLIENT_SECRET,
+            PHARMABROS_OAUTH_REFRESH_TOKEN,
+        )
+        files = svc.files().list(
+            q=f"'{PHARMABROS_DRIVE_FOLDER_ID}' in parents and trashed=false",
+            fields="files(id,name,createdTime)",
+            pageSize=200,
+        ).execute().get("files", [])
+
+        xlsx_files = [f for f in files if f["name"].endswith(".xlsx")]
+
+        # title_MMDD~ 기준으로 그룹핑
+        import re as _re
+        from collections import defaultdict as _dd
+        groups = _dd(list)
+        for f in xlsx_files:
+            m = _re.match(r"(.+_\d{4}~)", f["name"])
+            key = m.group(1) if m else f["name"]
+            groups[key].append(f)
+
+        warnings = []
+        for prefix, group in groups.items():
+            if len(group) > 1:
+                group.sort(key=lambda x: x["createdTime"], reverse=True)
+                for dup in group[1:]:
+                    svc.files().delete(fileId=dup["id"]).execute()
+                warnings.append(f"  {prefix}* : {len(group)}개 → {len(group)-1}개 자동 정리")
+
+        if warnings:
+            msg = "[파마브로스 Drive 경고] 중복 파일 자동 정리\n" + "\n".join(warnings)
+            send_telegram(msg)
+            print(f"  [Drive 헬스체크] {len(warnings)}건 중복 정리, 텔레그램 발송 완료")
+        else:
+            print("  [Drive 헬스체크] 이상 없음")
+    except Exception as e:
+        print(f"  [Drive 헬스체크 오류] {e}")
 
 
 def _run_pharmabros_if_needed(force: bool = False):
