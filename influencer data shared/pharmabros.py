@@ -287,8 +287,8 @@ def upload_to_drive(
         ).execute().get("files", [])
         for f in all_in_folder:
             if f["name"].startswith(safe_prefix):
-                service.files().update(fileId=f["id"], body={"trashed": True}).execute()
-                print(f"  [Drive] 기존 파일 휴지통 이동: {f['name']}")
+                service.files().delete(fileId=f["id"]).execute()
+                print(f"  [Drive] 기존 파일 삭제: {f['name']}")
 
     # 새 파일 업로드
     uploaded = service.files().create(
