@@ -276,14 +276,19 @@ def upload_to_drive(
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
-    # 같은 캠페인·같은 날짜 범위 기존 파일만 삭제
+    # 같은 캠페인(같은 시작일) 기존 파일 전체 삭제
+    # prefix: "{title}_{MMDD}~" → date_from이 같으면 이전 날짜 파일도 모두 정리
     if title:
-        safe_title  = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
-        date_range  = _date_range_str(date_from, date_to)
-        safe_prefix = f"{safe_title}_{date_range}"
+        safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip()
+        if date_from:
+            from_mmdd  = date_from.replace("-", "")[4:8]
+            safe_prefix = f"{safe_title}_{from_mmdd}~"
+        else:
+            safe_prefix = f"{safe_title}_"
         all_in_folder = service.files().list(
             q=f"'{folder_id}' in parents and trashed=false",
             fields="files(id,name)",
+            pageSize=200,
         ).execute().get("files", [])
         for f in all_in_folder:
             if f["name"].startswith(safe_prefix):
@@ -401,7 +406,7 @@ def run_pharmabros(
         file_name=file_name,
         title=title,
         date_from=date_from,
-        date_to=date_to,
+        date_to=query_to,  # 파일명과 동일한 실제 조회 종료일 사용
     )
 
     folder_url = f"https://drive.google.com/drive/folders/{drive_folder_id}"
