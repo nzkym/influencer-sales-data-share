@@ -22,7 +22,11 @@ MODEL = "claude-haiku-4-5-20251001"
 BATCH_SIZE = 150  # 한 번에 분류할 키워드 수
 MAX_RETRIES = 2
 
-BUSINESS_CONTEXT = """당신은 건강기능식품 제조·판매 사업자를 위한 키워드 선별 담당자입니다.
+# 2026-08-19: 원래 이 안내문 전체 + 매번 다른 키워드 목록을 한 user 메시지로 합쳐서 보냈는데,
+# 그러면 배치마다(한 번에 수백~수천 개를 150개씩 나눠 돌리므로 실행당 수십 번 호출됨) 이 긴
+# 안내문을 매번 새로 읽는 값을 치른다. 안내문(고정)과 키워드목록(매번 다름)을 분리해서 안내문만
+# system + cache_control로 캐시 표시 - 같은 실행 안에서 두 번째 배치부터는 캐시로 싸게 읽음.
+SYSTEM_INSTRUCTIONS = """당신은 건강기능식품 제조·판매 사업자를 위한 키워드 선별 담당자입니다.
 이 사업자는 건강기능식품이 본업이며, 아래 영역으로 사업을 확장하려고 합니다 (우선순위 순):
 1. 실버산업 / 고령친화용품 — **최우선, 현재 가장 신경 쓰는 영역**
    예: 의료용품, 재활운동용품, 보행보조기(워커/지팡이), 안마용품, 건강측정용품(혈압계/혈당계),
@@ -57,14 +61,11 @@ BUSINESS_CONTEXT = """당신은 건강기능식품 제조·판매 사업자를 �
 **단, 1번(실버산업) 영역은 애매하면 관대하게 포함시켜주세요** — 지금 이 사업자가 가장 중요하게
 보는 영역이라, 다른 영역보다 판단 기준을 낮춰서 놓치지 않는 쪽으로 판단해도 됩니다.
 
-키워드 후보 목록:
-{keyword_list}
-
 반드시 아래 JSON 형식으로만 답하세요.
 - relevant: 사업 확장과 관련 있는 키워드 전체 (후보 목록에 있는 표기 그대로)
 - silver_industry: relevant 중에서도 실버산업/고령친화용품에 해당하는 키워드만 (relevant의 부분집합)
 
-{{"relevant": ["키워드1", "키워드2", ...], "silver_industry": ["키워드2", ...]}}"""
+{{"relevant": ["키워드1", "키워드2", ...], "silver_industry": ["키워드2", ...]}}""".format()
 
 
 def _classify_batch(keywords: list[str], api_key: str) -> tuple[list[str], list[str]]:
@@ -77,7 +78,7 @@ def _classify_batch(keywords: list[str], api_key: str) -> tuple[list[str], list[
     """
     client = anthropic.Anthropic(api_key=api_key)
     keyword_list = "\n".join(f"- {kw}" for kw in keywords)
-    prompt = BUSINESS_CONTEXT.format(keyword_list=keyword_list)
+    user_msg = f"키워드 후보 목록:\n{keyword_list}"
     candidate_set = set(keywords)
 
     for attempt in range(1, MAX_RETRIES + 1):
@@ -85,7 +86,8 @@ def _classify_batch(keywords: list[str], api_key: str) -> tuple[list[str], list[
             response = client.messages.create(
                 model=MODEL,
                 max_tokens=4000,
-                messages=[{"role": "user", "content": prompt}],
+                system=[{"type": "text", "text": SYSTEM_INSTRUCTIONS, "cache_control": {"type": "ephemeral"}}],
+                messages=[{"role": "user", "content": user_msg}],
             )
             raw = response.content[0].text.strip()
             json_match = re.search(r'\{.*\}', raw, re.DOTALL)
