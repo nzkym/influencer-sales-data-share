@@ -1802,14 +1802,11 @@ def _run_saeunpum_lottery(force: bool = False):
 
 
 def _pharmabros_trash_old_files():
-    """파마브로스 업로드 xlsx 중 1개월 이상 된 파일을 휴지통으로 이동.
-
-    이 OAuth 토큰이 직접 업로드한 파일만 조회 가능하므로, 폴더 스캔 대신
-    파일명에 '업로드건'이 포함된 파일을 전체 Drive에서 검색하여 처리한다.
-    수동 업로드 또는 다른 OAuth 토큰으로 올린 파일은 이 함수로 처리 불가.
-    """
+    """완료 폴더 및 정산서 폴더에서 생성일(createdTime) 기준 30일 이상 된 파일을 휴지통으로 이동."""
     if not all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
                 PHARMABROS_OAUTH_REFRESH_TOKEN]):
+        return
+    if not PHARMABROS_DONE_FOLDER_ID and not PHARMABROS_SETTLEMENT_FOLDER_ID:
         return
     try:
         svc = pharmabros._drive_service_oauth(
@@ -1819,24 +1816,34 @@ def _pharmabros_trash_old_files():
         )
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
-        files = svc.files().list(
-            q=(f"name contains '업로드건' and trashed=false"
-               f" and modifiedTime < '{cutoff_str}'"),
-            fields="files(id,name,modifiedTime)",
-            pageSize=200,
-        ).execute().get("files", [])
-        trashed = []
-        for f in files:
-            svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
-            trashed.append(f"  {f['name']}")
-            print(f"  [Drive 구파일 휴지통] {f['name']}")
-        if trashed:
-            msg = (f"[파마브로스 Drive] 1개월 이상 된 파일 {len(trashed)}개 휴지통 이동\n"
-                   + "\n".join(trashed))
+
+        target_folders = []
+        if PHARMABROS_DONE_FOLDER_ID:
+            target_folders.append(("완료", PHARMABROS_DONE_FOLDER_ID))
+        if PHARMABROS_SETTLEMENT_FOLDER_ID:
+            target_folders.append(("정산서", PHARMABROS_SETTLEMENT_FOLDER_ID))
+
+        total_trashed = []
+        for folder_name, folder_id in target_folders:
+            files = svc.files().list(
+                q=(f"'{folder_id}' in parents and trashed=false"
+                   f" and createdTime < '{cutoff_str}'"
+                   f" and mimeType != 'application/vnd.google-apps.folder'"),
+                fields="files(id,name,createdTime)",
+                pageSize=200,
+            ).execute().get("files", [])
+            for f in files:
+                svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+                total_trashed.append(f"  [{folder_name}] {f['name']}")
+                print(f"  [Drive 구파일 휴지통] [{folder_name}] {f['name']}")
+
+        if total_trashed:
+            msg = (f"[파마브로스 Drive] 1개월 이상 된 파일 {len(total_trashed)}개 휴지통 이동\n"
+                   + "\n".join(total_trashed))
             send_telegram(msg)
-            print(f"  [Drive 구파일] {len(trashed)}건 휴지통 이동 완료")
+            print(f"  [Drive 구파일] {len(total_trashed)}건 휴지통 이동 완료")
         else:
-            print("  [Drive 구파일] 이 토큰이 업로드한 1개월+ 파일 없음")
+            print("  [Drive 구파일] 1개월+ 파일 없음")
     except Exception as e:
         print(f"  [Drive 구파일 휴지통 오류] {e}")
 
