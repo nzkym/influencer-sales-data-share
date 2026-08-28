@@ -132,6 +132,13 @@ MAX_RANK_PER_CATEGORY = 500
 # 이름 불일치가 아니라 네이버 차단(레이트리밋/캡차) 가능성이 높다고 판단하고 중단 + 알림
 BLOCK_SUSPECT_STREAK = 6
 
+# 차단 의심 시 완전히 포기하지 않고 대기 후 재시도한다 — 어차피 새벽 사이 여유 시간이 있고
+# 아침에 보고서만 받으면 되므로, 짧은 간격으로 재시도해서 또 차단되는 것보다 충분히 식힌 뒤
+# 이어서 진행하는 쪽이 낫다는 판단 (2026-08-28). 30분 → 60분 → 90분 → 120분으로 점점 늘려가며
+# 최대 4회 재시도(최대 총 대기 5시간) 후에도 안 풀리면 그때 최종 포기하고 부분 데이터로 진행.
+BLOCK_COOLDOWN_MINUTES_BASE = 30
+BLOCK_MAX_RETRY_ROUNDS = 4
+
 
 def _send_telegram_alert(message: str) -> None:
     """차단 의심 등 긴급 상황을 텔레그램으로 즉시 알림."""
@@ -591,12 +598,17 @@ async def get_all_period_keywords(
     category_notes: dict[str, str] = {}  # display_name → 최초 발견된 이슈 메모
     blocked = False
     consecutive_empty_selected = 0  # 카테고리 선택은 성공했는데 키워드가 0개인 연속 횟수
+    retry_round = 0  # 차단 감지 후 대기·재시도한 횟수
 
     total = len(SWEEP_CATEGORIES)
-    for idx, (main_cat, sub_cat, display_name) in enumerate(SWEEP_CATEGORIES, start=1):
+    i = 0
+    while i < total:
+        idx = i + 1
+        main_cat, sub_cat, display_name = SWEEP_CATEGORIES[i]
         print(f"\n[스크래퍼] ===== [{idx}/{total}] 카테고리: {display_name} =====")
         category_max_rank = max(max_rank, SILVER_DEEP_SCAN_RANK) if display_name in DEEP_SCAN_CATEGORIES else max_rank
 
+        block_hit = False
         for period in SWEEP_PERIODS:
             try:
                 keywords, note = await get_top_keywords(
@@ -608,7 +620,7 @@ async def get_all_period_keywords(
                 )
 
                 if note == "BLOCKED":
-                    blocked = True
+                    block_hit = True
                     break
 
                 # 카테고리 이슈 메모 수집 (중복 저장 방지)
@@ -631,20 +643,37 @@ async def get_all_period_keywords(
                 print(f"[스크래퍼] {display_name}/{period} 스크래핑 실패: {e}")
 
             if consecutive_empty_selected >= BLOCK_SUSPECT_STREAK:
-                blocked = True
+                block_hit = True
                 break
 
-        if blocked:
-            print(f"\n[스크래퍼] ⚠️ 네이버 차단/레이트리밋 의심 — {idx}/{total}번째 카테고리에서 스윕 중단")
+        if not block_hit:
+            i += 1
+            await asyncio.sleep(5)  # 카테고리 전환 간 대기
+            continue
+
+        # === 차단 의심 감지 — 완전히 포기하지 않고 대기 후 같은 카테고리부터 재시도 ===
+        if retry_round >= BLOCK_MAX_RETRY_ROUNDS:
+            blocked = True
+            print(f"\n[스크래퍼] ⚠️ 네이버 차단/레이트리밋 — {BLOCK_MAX_RETRY_ROUNDS}회 재시도 모두 실패, {idx}/{total}번째에서 최종 중단")
             _send_telegram_alert(
-                "⚠️ [네이버 트렌드 스윕] 네이버 차단(레이트리밋/캡차)이 의심되어 스크래핑을 중단했습니다.\n\n"
-                f"진행 상황: {idx}/{total}개 카테고리 처리 중 중단\n"
-                f"지금까지 수집된 데이터만으로 리포트를 생성합니다.\n"
-                f"다음 실행 시 재시도해주세요 (IP가 바뀌거나 시간이 지나면 보통 해제됩니다)."
+                "❌ [네이버 트렌드 스윕] 네이버 차단이 계속돼서 최종 포기했습니다.\n\n"
+                f"진행 상황: {idx}/{total}개 카테고리 처리 중 중단 (재시도 {BLOCK_MAX_RETRY_ROUNDS}회 모두 실패)\n"
+                f"지금까지 수집된 데이터만으로 리포트를 생성합니다."
             )
             break
 
-        await asyncio.sleep(5)  # 카테고리 전환 간 대기
+        retry_round += 1
+        cooldown_min = BLOCK_COOLDOWN_MINUTES_BASE * retry_round
+        print(f"\n[스크래퍼] ⚠️ 네이버 차단/레이트리밋 의심 — {idx}/{total}번째, {cooldown_min}분 대기 후 재시도 ({retry_round}/{BLOCK_MAX_RETRY_ROUNDS})")
+        _send_telegram_alert(
+            "⚠️ [네이버 트렌드 스윕] 네이버 차단이 의심되어 잠시 쉬었다가 이어서 진행합니다.\n\n"
+            f"진행 상황: {idx}/{total}개 카테고리\n"
+            f"대기 시간: {cooldown_min}분 (재시도 {retry_round}/{BLOCK_MAX_RETRY_ROUNDS})\n"
+            f"완료까지는 계속 백그라운드로 진행됩니다 — 별도 조치 필요 없습니다."
+        )
+        await asyncio.sleep(cooldown_min * 60)
+        consecutive_empty_selected = 0
+        # i는 그대로 두어 같은 카테고리부터 재시도
 
     results["blocked"] = blocked
 
