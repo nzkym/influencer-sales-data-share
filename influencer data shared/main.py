@@ -1539,20 +1539,25 @@ tr td:first-child{{color:#555;width:38%}}
         except Exception:
             pass
 
-        # '정산서' 폴더 내 동일 캠페인·날짜 범위 기존 파일만 삭제 (중복 방지)
+        # 동일 캠페인·날짜 범위 파일이 이미 있으면 중복 정리 후 스킵 (재업로드 방지)
+        _del_prefix = f"{safe_title}_{_date_range}" if _date_range else f"{safe_title}_"
         try:
-            _del_prefix = f"{safe_title}_{_date_range}" if _date_range else f"{safe_title}_"
-            old_files = svc.files().list(
+            existing = svc.files().list(
                 q=f"'{PHARMABROS_SETTLEMENT_FOLDER_ID}' in parents and trashed=false",
                 fields="files(id,name)",
+                pageSize=200,
             ).execute().get("files", [])
-            for of in old_files:
-                if (of["name"].startswith(_del_prefix)
-                        or of["name"] in (f"{title} 정산서.pdf", f"{title} 정산서.html")):
+            matching = [f for f in existing
+                        if f["name"].startswith(_del_prefix)
+                        or f["name"] in (f"{title} 정산서.pdf", f"{title} 정산서.html")]
+            if matching:
+                for of in matching[1:]:
                     svc.files().update(fileId=of["id"], body={"trashed": True}).execute()
-                    print(f"  [파마브로스 정산서] 기존 파일 삭제: {of['name']}")
-        except Exception:
-            pass
+                    print(f"  [파마브로스 정산서] 중복 제거: {of['name']}")
+                print(f"  [파마브로스 정산서] '{title[:30]}' 이미 존재, 스킵")
+                return
+        except Exception as e:
+            print(f"  [파마브로스 정산서 기존파일 조회 오류] {e}")
 
         # playwright로 HTML → PDF 변환 (CSS gradient/border 등 완전 보존)
         from playwright.sync_api import sync_playwright
