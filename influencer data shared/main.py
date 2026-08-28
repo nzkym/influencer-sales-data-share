@@ -973,6 +973,7 @@ def run_once():
     # ── 파마브로스 파일공유 ───────────────────────────────
     _run_pharmabros_if_needed()
     _pharmabros_drive_health_check()
+    _pharmabros_trash_old_files()
 
     # ── 파마브로스 정산 백필 (종료 캠페인 중 미처리건) ────
     _backfill_pharmabros_settlements()
@@ -1797,6 +1798,49 @@ def _run_saeunpum_lottery(force: bool = False):
         print("  [사은품 추첨] 처리할 캠페인 없음 (날짜 조건 미충족 or 이미 처리됨)")
     else:
         print(f"  [사은품 추첨] 완료: {processed}개 캠페인 처리")
+
+
+def _pharmabros_trash_old_files():
+    """완료·정산서 폴더에서 1개월 이상 된 파일을 휴지통으로 이동."""
+    if not all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
+                PHARMABROS_OAUTH_REFRESH_TOKEN]):
+        return
+    folders = []
+    if PHARMABROS_DRIVE_FOLDER_ID:
+        folders.append(("완료", PHARMABROS_DRIVE_FOLDER_ID))
+    if PHARMABROS_SETTLEMENT_FOLDER_ID:
+        folders.append(("정산서", PHARMABROS_SETTLEMENT_FOLDER_ID))
+    if not folders:
+        return
+    try:
+        svc = pharmabros._drive_service_oauth(
+            PHARMABROS_OAUTH_CLIENT_ID,
+            PHARMABROS_OAUTH_CLIENT_SECRET,
+            PHARMABROS_OAUTH_REFRESH_TOKEN,
+        )
+        cutoff = datetime.now(timezone.utc) - timedelta(days=30)
+        cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
+        trashed = []
+        for folder_name, folder_id in folders:
+            files = svc.files().list(
+                q=(f"'{folder_id}' in parents and trashed=false"
+                   f" and modifiedTime < '{cutoff_str}'"),
+                fields="files(id,name,modifiedTime)",
+                pageSize=200,
+            ).execute().get("files", [])
+            for f in files:
+                svc.files().update(fileId=f["id"], body={"trashed": True}).execute()
+                trashed.append(f"  [{folder_name}] {f['name']}")
+                print(f"  [Drive 구파일 휴지통] {f['name']}")
+        if trashed:
+            msg = (f"[파마브로스 Drive] 1개월 이상 된 파일 {len(trashed)}개 휴지통 이동\n"
+                   + "\n".join(trashed))
+            send_telegram(msg)
+            print(f"  [Drive 구파일] {len(trashed)}건 휴지통 이동 완료")
+        else:
+            print("  [Drive 구파일] 1개월 이상 된 파일 없음")
+    except Exception as e:
+        print(f"  [Drive 구파일 휴지통 오류] {e}")
 
 
 def _pharmabros_drive_health_check():

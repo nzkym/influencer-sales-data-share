@@ -56,6 +56,9 @@ JDHEALTH_CLIENT_SECRET=...
 NUTPET_CLIENT_ID=...
 NUTPET_CLIENT_SECRET=...
 
+NUTMEDI_CLIENT_ID=...
+NUTMEDI_CLIENT_SECRET=...
+
 TELEGRAM_BOT_TOKEN=...
 TELEGRAM_CHAT_ID=...
 ```
@@ -80,6 +83,7 @@ cd ~/influencer-sales-data-share/'influencer data shared' && nano .env
 | nutone | brand.naver.com/nutone |
 | jdhealth | brand.naver.com/jdhealth |
 | nutpet | brand.naver.com/nutpet (= smartstore.naver.com/nutpet) |
+| nutmedi | smartstore.naver.com/moduhealthcare (스토어명 변경으로 URL 혼동 주의) |
 
 > brand.naver.com과 smartstore.naver.com은 동일하게 처리
 
@@ -111,3 +115,33 @@ cd ~/influencer-sales-data-share/'influencer data shared' && nano .env
 ## 자동 실행 스케줄
 매 시간 정각 (crontab: `0 * * * *`)
 실행 전 git pull로 최신 코드 자동 반영
+
+---
+
+## 코드 수정 후 배포 검증 절차 (필수)
+
+**코드를 수정하고 git push한 뒤 "완료"라고 보고하기 전에 반드시 아래를 확인한다.**
+
+### 왜 필요한가
+2026-08-26: 파마브로스 Drive 업로드 코드 수정 후 scp로 직접 서버 파일을 덮어썼다가
+GCP git이 충돌 상태가 되어 cron이 1시간 이상 실행 안 됨. 코드는 배포됐지만
+자동화가 중단된 채로 완료 보고한 사례.
+
+### 배포 절차
+
+1. 로컬에서 수정 완료 후 `git push` (scp 직접 복사 절대 금지)
+2. 다음 cron 실행 시각까지 대기 (매 정각이므로 최대 1시간)
+3. GCP SSH에서 로그 확인:
+   ```bash
+   ssh -i ~/.ssh/dashboard_gcp hsbchong7@34.30.139.247
+   # 또는 influencer-sales VM:
+   # Google Cloud Console → SSH 버튼
+   tail -100 ~/influencer-sales-data-share/'influencer data shared'/cron.log
+   ```
+4. 수정한 기능이 정상 실행됐음을 로그·시트·알림 등 실제 증거로 확인
+5. 확인 완료 후에만 "완료" 보고
+
+### scp 직접 배포 절대 금지
+서버 파일을 scp/sftp/직접 편집으로 수정하면 git이 "로컬 변경사항 있음"으로 인식해
+`git pull`을 거부 → 이후 모든 cron이 최신 코드를 못 받음 → 자동화 전체 중단.
+반드시 git push → GCP auto-pull 경로만 사용한다.
