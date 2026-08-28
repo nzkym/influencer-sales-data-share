@@ -1801,16 +1801,15 @@ def _run_saeunpum_lottery(force: bool = False):
 
 
 def _pharmabros_trash_old_files():
-    """완료·정산서 폴더에서 1개월 이상 된 파일을 휴지통으로 이동."""
+    """완료·정산서 폴더에서 1개월 이상 된 파일을 휴지통으로 이동.
+
+    PHARMABROS_DRIVE_FOLDER_ID는 상위 폴더이고 실제 xlsx는 그 안의 '완료' 하위폴더에 있으므로
+    동적으로 '완료' 하위폴더를 찾아 스캔한다.
+    """
     if not all([PHARMABROS_OAUTH_CLIENT_ID, PHARMABROS_OAUTH_CLIENT_SECRET,
                 PHARMABROS_OAUTH_REFRESH_TOKEN]):
         return
-    folders = []
-    if PHARMABROS_DRIVE_FOLDER_ID:
-        folders.append(("완료", PHARMABROS_DRIVE_FOLDER_ID))
-    if PHARMABROS_SETTLEMENT_FOLDER_ID:
-        folders.append(("정산서", PHARMABROS_SETTLEMENT_FOLDER_ID))
-    if not folders:
+    if not PHARMABROS_DRIVE_FOLDER_ID:
         return
     try:
         svc = pharmabros._drive_service_oauth(
@@ -1818,6 +1817,23 @@ def _pharmabros_trash_old_files():
             PHARMABROS_OAUTH_CLIENT_SECRET,
             PHARMABROS_OAUTH_REFRESH_TOKEN,
         )
+        # 상위폴더 아래의 '완료' 하위폴더 ID를 동적으로 조회
+        done_result = svc.files().list(
+            q=(f"'{PHARMABROS_DRIVE_FOLDER_ID}' in parents"
+               f" and name='완료' and mimeType='application/vnd.google-apps.folder'"
+               f" and trashed=false"),
+            fields="files(id,name)",
+            pageSize=10,
+        ).execute().get("files", [])
+        folders = []
+        if done_result:
+            folders.append(("완료", done_result[0]["id"]))
+        if PHARMABROS_SETTLEMENT_FOLDER_ID:
+            folders.append(("정산서", PHARMABROS_SETTLEMENT_FOLDER_ID))
+        if not folders:
+            print("  [Drive 구파일] '완료' 하위폴더를 찾을 수 없음")
+            return
+
         cutoff = datetime.now(timezone.utc) - timedelta(days=30)
         cutoff_str = cutoff.strftime("%Y-%m-%dT%H:%M:%SZ")
         trashed = []
