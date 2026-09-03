@@ -1,9 +1,29 @@
 # API 키 및 인증 파일 (절대 업로드 금지)
+업체전반정보수집 및 개선프로그램/dashboard_gcp
+업체전반정보수집 및 개선프로그램/dashboard_gcp.pub
+이미지 등 작업/.env
 influencer data shared/.env
 influencer data shared/credentials/
+influencer data shared/pharmabros_token.json
+influencer data shared/client_secret.json
 patent name find/.env
 naver_sales_check/.env
 조은혜인센티브관련 쿠팡,올리브영데이터조사/.env
+큐텐재팬_채널운영/.env
+쇼피_싱가포르_채널관리/.env
+경리나라ai담당/.env
+경리나라ai담당/reports/
+쇼피_싱가포르_채널관리/.cookies_shopee_sg.json
+쇼피_싱가포르_채널관리/스크린샷/
+쇼피_싱가포르_채널관리/구조_덤프.json
+쇼피_싱가포르_채널관리/.venv/
+ai MD/*/.env
+ai MD/*/scripts/state/
+ai MD/*/coupang_ads_state.json
+기타/seo최적화/.env
+기타/seo최적화/chrome_profile/
+기타/정부지원사업/.env
+기타/정부지원사업/scripts/state/
 
 # Python 가상환경 및 캐시
 influencer data shared/.venv/
