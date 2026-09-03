@@ -1,0 +1,193 @@
+{
+  "exclude_channels": [
+    "재고이동"
+  ],
+  "exclude_channel_keywords": ["로켓"],
+  "poomgo_channels": [
+    "품고(정담트리)",
+    "품고(뉴트원)",
+    "품고"
+  ],
+  "no_alert_products": [],
+  "inbound_ignore_products": [
+    "프로바이오틱스 유산균 (뉴트원) 60g (2g x 30포)"
+  ],
+  "outlets": {
+    "personal": {
+      "name": "개인",
+      "sabn": "9999999902",
+      "addr": "",
+      "permit_no": ""
+    },
+    "coupang": {
+      "name": "쿠팡",
+      "sabn": "1208800767",
+      "addr": "서울특별시 송파구 송파대로 570 (신천동)",
+      "permit_no": "1208800767"
+    }
+  },
+  "products": [
+    {
+      "ezadmin_keywords": ["밀크씨슬"],
+      "ezadmin_exact_names": ["뉴트원 밀크씨슬 부스터 60캡슐"],
+      "coupang_keywords": ["밀크씨슬"],
+      "coupang_exact_skus": ["뉴트원 밀크씨슬 부스터 600mg x 60캡슐 1개"],
+      "sheet_name": "뉴트원 밀크씨슬 부스터 36g",
+      "histrace_num": "880993503037126001",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["비오틴"],
+      "ezadmin_exact_names": ["뉴트원 비오틴부스터 30정"],
+      "coupang_keywords": ["비오틴"],
+      "coupang_exact_skus": ["뉴트원 비오틴 부스터 450mg x 30정 13.5g   1개"],
+      "sheet_name": "뉴트원 비오틴 부스터",
+      "histrace_num": "880954543797325101",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["유기농", "비타민D", "1000IU", "뉴트원비타민D", "뉴트원 비타민D"],
+      "ezadmin_exact_names": ["뉴트원 비타민D유기농 1000IU 60정"],
+      "coupang_keywords": ["유기농", "1000IU"],
+      "coupang_exact_skus": ["뉴트원 비타민D 유기농 1000IU 300mg x 60정 1개"],
+      "sheet_name": "뉴트원 유기농 비타민D 1000IU(60정)",
+      "histrace_num": "880977220391420280426",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["초임계", "알티지오메가3", "알티지 오메가3"],
+      "ezadmin_exact_names": ["뉴트원 초임계알티지오메가3부스터 30캡슐"],
+      "coupang_keywords": ["초임계", "알티지"],
+      "coupang_exact_skus": ["뉴트원초임계알티지오메가3부스터 30캡슐 RTG 4중기능성 저온추출"],
+      "sheet_name": "뉴트원초임계알티지오메가3",
+      "histrace_num": "116286252602",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트원칼슘", "뉴트원 칼슘마그네슘비타민D", "뉴트원 칼마디"],
+      "ezadmin_exact_names": ["뉴트원 칼마디 칼슘마그네슘비타민D 60정"],
+      "coupang_keywords": ["칼슘 마그네슘 비타민D"],
+      "coupang_exact_skus": ["뉴트원 칼슘 마그네슘 비타민D 1200mg x 60캡슐 72g   1개"],
+      "sheet_name": "뉴트원칼슘마그네슘비타민D",
+      "histrace_num": "880954543337126102",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["징크디", "징크 디"],
+      "ezadmin_exact_names": ["뉴트키즈징크디시럽 144ml"],
+      "coupang_keywords": ["징크디", "징크"],
+      "coupang_exact_skus": ["뉴트키즈 징크디시럽 1bx 어린이 아연 유아 아이 키즈 48ml * 3개입"],
+      "sheet_name": "뉴트키즈 징크디 시럽",
+      "histrace_num": "94190222502950",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트키즈칼슘", "뉴트키즈 칼슘마그네슘비타민D"],
+      "ezadmin_exact_names": ["뉴트키즈칼슘마그네슘비타민D 30포"],
+      "coupang_keywords": ["뉴트키즈", "칼슘마그네슘비타민D"],
+      "coupang_exact_skus": ["뉴트키즈 칼슘마그네슘비타민D 2g x 30포(60g) 1개"],
+      "sheet_name": "뉴트키즈칼슘마그네슘비타민D",
+      "histrace_num": "880954543569626102",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트키즈타민", "뉴트키즈 타민"],
+      "ezadmin_exact_names": ["뉴트키즈타민 30포"],
+      "coupang_keywords": ["뉴트키즈타민", "뉴트키즈 타민"],
+      "coupang_exact_skus": ["정담건강 뉴트키즈타민 어린이비타민 종합영양제 유아 멀티 아연, 30포, 2g"],
+      "sheet_name": "뉴트키즈타민",
+      "histrace_num": "880954543138426101",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["락티젠"],
+      "ezadmin_exact_names": ["락티젠 유산균 30포"],
+      "coupang_keywords": ["락티젠"],
+      "coupang_exact_skus": ["락티젠 유산균 30포 1개 60g"],
+      "sheet_name": "락티젠",
+      "histrace_num": "75099202600004",
+      "multiplier": 3
+    },
+    {
+      "ezadmin_keywords": ["마그네슘액티브", "마그네슘 액티브"],
+      "ezadmin_exact_names": ["뉴트원 마그네슘 액티브 30정"],
+      "coupang_keywords": ["마그네슘액티브", "마그네슘 액티브"],
+      "coupang_exact_skus": ["뉴트원 마그네슘 액티브 900mg x 30정 1개"],
+      "sheet_name": "뉴트원마그네슘액티브",
+      "histrace_num": "880954543673026102",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["루테인", "지아잔틴", "아이플로라"],
+      "ezadmin_exact_names": ["뉴트원 루테인지아잔틴 아이플로라 30캡슐"],
+      "coupang_keywords": ["루테인", "지아잔틴"],
+      "coupang_exact_skus": ["뉴트원 루테인지아잔틴 아이플로라 250mg x 30캡슐 1개"],
+      "sheet_name": "뉴트원 루테인지아잔틴 아이플로라",
+      "histrace_num": "120226252501",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트키즈", "알티지", "오메가3", "츄어블"],
+      "ezadmin_exact_names": ["뉴트키즈 알티지 오메가3 츄어블 30젤리"],
+      "coupang_keywords": ["뉴트키즈", "알티지", "오메가3", "츄어블"],
+      "coupang_exact_skus": ["뉴트키즈 알티지 오메가3 츄어블 1.9g x 30젤리 57g 1개"],
+      "sheet_name": "뉴트키즈 알티지 오메가3 츄어블",
+      "histrace_num": "12272825B",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트맘스칼마디", "뉴트맘스 칼마디"],
+      "ezadmin_exact_names": ["뉴트맘스 칼마디 칼슘마그네슘비타민D 60정"],
+      "coupang_keywords": ["뉴트맘스", "칼마디"],
+      "coupang_exact_skus": ["뉴트맘스 칼마디 칼슘 마그네슘 비타민D, 36g, 1세트"],
+      "sheet_name": "뉴트맘스칼마디칼슘마그네슘비타민D",
+      "histrace_num": "880954543951926101",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트맘스", "유기농", "비타민D"],
+      "ezadmin_exact_names": ["뉴트맘스 유기농 비타민D 60정"],
+      "coupang_keywords": ["뉴트맘스", "유기농"],
+      "coupang_exact_skus": ["뉴트맘스 유기농 비타민D 300mg x 60정 18g  1개"],
+      "sheet_name": "뉴트맘스 유기농 비타민D",
+      "histrace_num": "880034299090620280426",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트원 비타민D 2000IU", "비타민D2000IU", "비타민D 2000IU"],
+      "ezadmin_exact_names": ["뉴트원 비타민D 2000IU 60캡슐"],
+      "coupang_keywords": ["뉴트원", "비타민D 2000IU"],
+      "coupang_exact_skus": ["뉴트원 비타민D 2000IU 300mg x 60캡슐 18g 1개"],
+      "sheet_name": "뉴트원 비타민D 2000IU",
+      "histrace_num": "1274992620280531",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트원 알티지 오메가3 츄어블", "뉴트원알티지오메가3츄어블"],
+      "ezadmin_exact_names": ["뉴트원 알티지 오메가3 츄어블 60캡슐"],
+      "coupang_keywords": ["뉴트원", "알티지 오메가3 츄어블"],
+      "coupang_exact_skus": [],
+      "sheet_name": "뉴트원 알티지 오메가3 츄어블 780mg",
+      "histrace_num": "",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["뉴트키즈 종합비타민", "뉴트키즈종합비타민"],
+      "ezadmin_exact_names": ["뉴트키즈 종합비타민 미네랄 츄어블 30젤리"],
+      "coupang_keywords": ["뉴트키즈", "종합비타민", "미네랄"],
+      "coupang_exact_skus": ["뉴트키즈 종합비타민 미네랄 츄어블 1.9 x 30젤리 57g 1개"],
+      "sheet_name": "뉴트키즈 종합비타민 미네랄 츄어블",
+      "histrace_num": "",
+      "multiplier": 1
+    },
+    {
+      "ezadmin_keywords": ["마그자임"],
+      "ezadmin_exact_names": ["마그자임 30정"],
+      "coupang_keywords": ["마그자임"],
+      "coupang_exact_skus": [],
+      "sheet_name": "마그자임",
+      "histrace_num": "",
+      "multiplier": 1
+    }
+  ]
+}
