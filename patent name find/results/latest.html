@@ -1,0 +1,391 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>상표 선점 후보 리포트 — 2026-09-03</title>
+  <style>
+    * { margin:0; padding:0; box-sizing:border-box; }
+    body { font-family:'Apple SD Gothic Neo','Noto Sans KR',sans-serif; background:#0f1117; color:#e0e0e0; line-height:1.6; }
+
+    /* 헤더 */
+    .header { background:linear-gradient(135deg,#1a1a2e,#16213e); padding:40px 20px; text-align:center; border-bottom:1px solid #2a2a4a; }
+    .header h1 { font-size:26px; color:#fff; margin-bottom:8px; }
+    .header .date { color:#666; font-size:13px; margin-bottom:20px; }
+    .insight-box { display:inline-block; background:rgba(255,255,255,0.04); border:1px solid #2a2a4a; border-radius:10px; padding:14px 24px; max-width:720px; font-size:14px; color:#dcdcdc; }
+
+    /* 컨테이너 */
+    .container { max-width:960px; margin:0 auto; padding:30px 20px; }
+
+    /* 요약 테이블 */
+    .section-title { font-size:14px; color:#555; letter-spacing:1px; text-transform:uppercase; margin-bottom:14px; padding-bottom:8px; border-bottom:1px solid #222; }
+    .summary-table { width:100%; border-collapse:collapse; margin-bottom:40px; font-size:14px; }
+    .summary-table th { text-align:left; color:#9a9a9a; font-weight:normal; padding:8px 12px; border-bottom:1px solid #222; font-size:12px; text-transform:uppercase; }
+    .summary-table td { padding:10px 12px; border-bottom:1px solid #1a1a2e; }
+    .summary-table tr:hover td { background:rgba(255,255,255,0.02); }
+
+    /* 카드 */
+    .card { background:#141420; border:1px solid #2a2a4a; border-radius:12px; margin-bottom:20px; overflow:hidden; }
+    .card-header { display:flex; align-items:flex-start; gap:16px; padding:20px; background:rgba(255,255,255,0.02); }
+    .rank-box { min-width:52px; text-align:center; }
+    .rank { display:block; font-size:24px; font-weight:bold; color:#fff; }
+    .tier { font-size:13px; }
+    .term-box { flex:1; }
+    .term-box h3 { font-size:19px; color:#fff; margin-bottom:5px; }
+    .term-box h3 small { font-size:13px; color:#666; font-weight:normal; }
+    .summary { color:#b0b0b0; font-size:13px; }
+    .urgency-box { padding-top:4px; }
+    .card-body { padding:18px 20px; }
+    .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:16px; margin-bottom:12px; }
+    .info-item .label { display:block; font-size:11px; color:#9a9a9a; font-weight:bold; letter-spacing:0.5px; margin-bottom:5px; text-transform:uppercase; }
+    .info-item p { font-size:13px; color:#d0d0d0; }
+
+    /* 등급 배너 */
+    .verdict-banner { margin-top:16px; display:flex; gap:10px; justify-content:center; flex-wrap:wrap; }
+    .verdict-banner span { padding:6px 16px; border-radius:20px; font-size:13px; font-weight:bold; }
+    .v-ok { background:rgba(39,174,96,0.15); color:#27ae60; border:1px solid rgba(39,174,96,0.4); }
+    .v-mid { background:rgba(243,156,18,0.15); color:#f39c12; border:1px solid rgba(243,156,18,0.4); }
+    .v-no { background:rgba(231,76,60,0.15); color:#e74c3c; border:1px solid rgba(231,76,60,0.4); }
+    .v-new { background:rgba(47,129,247,0.15); color:#58a6ff; border:1px solid rgba(47,129,247,0.4); }
+
+    /* 국내 노출도 */
+    .domestic { background:rgba(0,0,0,0.25); border-radius:8px; padding:14px 16px; margin-top:14px; }
+    .domestic-head { display:flex; align-items:center; justify-content:space-between; gap:10px; margin-bottom:12px; }
+    .metrics { display:grid; grid-template-columns:repeat(4,1fr); gap:10px; margin-bottom:10px; }
+    .metric { text-align:center; background:rgba(255,255,255,0.03); border-radius:6px; padding:8px 4px; }
+    .m-label { display:block; font-size:11px; color:#9a9a9a; margin-bottom:3px; }
+    .m-value { display:block; font-size:15px; font-weight:bold; color:#f0f0f0; }
+    .verdict { font-size:13px; color:#d0d0d0; line-height:1.6; }
+    .variant-note { font-size:12px; color:#e67e22; margin-top:8px; padding-top:8px; border-top:1px dashed #333; }
+
+    /* 푸터 */
+    .footer { text-align:center; padding:30px 20px; color:#909090; font-size:12px; border-top:1px solid #1a1a1a; margin-top:20px; }
+
+    @media(max-width:640px) {
+      .card-header { flex-wrap:wrap; }
+      .grid2 { grid-template-columns:1fr; }
+      .metrics { grid-template-columns:repeat(2,1fr); }
+      .summary-table { font-size:12px; }
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📊 상표 선점 후보 리포트</h1>
+  <p class="date">생성일: 2026-09-03 &nbsp;|&nbsp; 해외 트렌드 + Claude AI 분석</p>
+  <div class="insight-box">💡 </div>
+  <div class="verdict-banner"><span class="v-ok">낼 만함 3개</span><span class="v-mid">조건부 0개</span><span class="v-no">가능성 낮음 1개</span><span class="v-new">새로운 단어 4개</span></div>
+</div>
+
+<div class="container">
+
+  <p class="section-title">빠른 요약</p>
+  <table class="summary-table">
+    <thead>
+      <tr>
+        <th>#</th><th>등록 가능성</th><th>후보어</th><th>요약</th><th>국내 노출</th><th>긴급도</th>
+      </tr>
+    </thead>
+    <tbody>
+      
+        <tr>
+          <td style="color:#888;">1</td>
+          <td style="color:#27ae60;font-weight:bold;white-space:nowrap;">낼 만함</td>
+          <td><strong>정밀 폴리페놀</strong><br><span style="color:#888;font-size:12px;">Precision Polyphenols</span></td>
+          <td style="color:#dcdcdc;font-size:13px;">폴리페놀 성분을 정밀 규격화한 새 프레이밍, 아론빗 론칭과 함께 부상한 개념어</td>
+          <td style="color:#27ae60;font-size:13px;white-space:nowrap;">0건</td>
+          <td><span style="color:#e74c3c;">보통</span></td>
+        </tr>
+        <tr>
+          <td style="color:#888;">2</td>
+          <td style="color:#27ae60;font-weight:bold;white-space:nowrap;">낼 만함</td>
+          <td><strong>자기확인 GRAS</strong><br><span style="color:#888;font-size:12px;">Self-affirmed GRAS</span></td>
+          <td style="color:#dcdcdc;font-size:13px;">미국 FDA가 폐지 제안한 기업 자율 안전 선언 제도, 업계 혁신 장벽 우려 확산</td>
+          <td style="color:#27ae60;font-size:13px;white-space:nowrap;">0건</td>
+          <td><span style="color:#e74c3c;">긴급</span></td>
+        </tr>
+        <tr>
+          <td style="color:#888;">3</td>
+          <td style="color:#27ae60;font-weight:bold;white-space:nowrap;">낼 만함</td>
+          <td><strong>뷰티 프롬 위딘</strong><br><span style="color:#888;font-size:12px;">Beauty-from-within</span></td>
+          <td style="color:#dcdcdc;font-size:13px;">섭취형 미용 보충제 카테고리 총칭, 뉴트리코스메틱 시장의 핵심 키워드로 부상</td>
+          <td style="color:#27ae60;font-size:13px;white-space:nowrap;">0건</td>
+          <td><span style="color:#e74c3c;">보통</span></td>
+        </tr>
+        <tr>
+          <td style="color:#888;">4</td>
+          <td style="color:#e74c3c;font-weight:bold;white-space:nowrap;">가능성 낮음</td>
+          <td><strong>아커만시아 GLP-1 연동</strong><br><span style="color:#888;font-size:12px;">Akkermansia muciniphila GLP-1</span></td>
+          <td style="color:#dcdcdc;font-size:13px;">아커만시아가 GLP-1·인슐린 분비에 영향, 일본·EU 기능성 표시 신청 움직임 시작</td>
+          <td style="color:#e74c3c;font-size:13px;white-space:nowrap;">3,094건</td>
+          <td><span style="color:#e74c3c;">긴급</span></td>
+        </tr>
+    </tbody>
+  </table>
+
+  <p class="section-title">상세 분석</p>
+  
+    <div class="card" style="border-left:5px solid #e74c3c;">
+      <div class="card-header">
+        <div class="rank-box">
+          <span class="rank">#1</span>
+          <span class="tier" style="color:#e74c3c;">★★★</span>
+        </div>
+        <div class="term-box">
+          <h3>정밀 폴리페놀 <small>(Precision Polyphenols)</small><span style="background:#2f81f7;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;margin-left:8px;vertical-align:middle;">NEW</span></h3>
+          <p class="summary">폴리페놀 성분을 정밀 규격화한 새 프레이밍, 아론빗 론칭과 함께 부상한 개념어</p>
+        </div>
+        <div class="urgency-box"><span style="background:#f39c12;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">보통</span></div>
+      </div>
+      <div class="card-body">
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">🌍 해외 현황</span>
+            <p>Vitafoods Europe 2026에서 Aronvit 론칭과 함께 제시된 신규 카테고리 프레이밍.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">🇰🇷 국내 현황</span>
+            <p>국내에서는 아직 이 표현 자체가 사용되지 않아 개념 선점 여지 있음.</p>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">📋 상표 전략</span>
+            <p>'정밀 폴리페놀'은 개념어이므로 한글 단독 등록은 어렵고, 결합 상표로 구성해 출원 검토.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">💰 시장 잠재력</span>
+            <p>프리미엄 항산화·장 건강 시장에서 차별화 포지셔닝 언어로 활용 가치 높음.</p>
+          </div>
+        </div>
+        
+        <div class="domestic" style="border-left:3px solid #27ae60;">
+          <div class="domestic-head">
+            <span class="label">🔍 국내 노출도 (등록 가능성 판정 근거)</span>
+            <span style="background:#27ae60;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">낼 만함</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span class="m-label">블로그 노출</span>
+              <span class="m-value" style="color:#27ae60;">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">상품 맥락</span>
+              <span class="m-value">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">뉴스</span>
+              <span class="m-value">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">국내 첫 등장</span>
+              <span class="m-value">확인 불가 (검색 노이즈)</span>
+            </div>
+          </div>
+          <p class="verdict">국내 노출 0건 — 거의 안 쓰이는 말입니다. 지금이 선점 적기입니다.</p>
+          
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="border-left:5px solid #e74c3c;">
+      <div class="card-header">
+        <div class="rank-box">
+          <span class="rank">#2</span>
+          <span class="tier" style="color:#e74c3c;">★★★</span>
+        </div>
+        <div class="term-box">
+          <h3>자기확인 GRAS <small>(Self-affirmed GRAS)</small><span style="background:#2f81f7;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;margin-left:8px;vertical-align:middle;">NEW</span></h3>
+          <p class="summary">미국 FDA가 폐지 제안한 기업 자율 안전 선언 제도, 업계 혁신 장벽 우려 확산</p>
+        </div>
+        <div class="urgency-box"><span style="background:#e74c3c;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">긴급</span></div>
+      </div>
+      <div class="card-body">
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">🌍 해외 현황</span>
+            <p>FDA가 2026년 8월 연방관보에 규칙안 게재, 의견 제출 기한 2026년 12월 9일.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">🇰🇷 국내 현황</span>
+            <p>미국 수출 기업 직격탄 우려, 국내 식약처 사전신고 방식과 구조적 유사점으로 참고 필요.</p>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">📋 상표 전략</span>
+            <p>상표 출원 대상은 아니나, 미국 수출 포트폴리오 원료 안전성 서류 재검토가 시급한 규제 신호.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">💰 시장 잠재력</span>
+            <p>제도 폐지 시 신원료 진입 비용·기간 증가로 선행 인증 완료 기업에 경쟁 우위 발생.</p>
+          </div>
+        </div>
+        
+        <div class="domestic" style="border-left:3px solid #27ae60;">
+          <div class="domestic-head">
+            <span class="label">🔍 국내 노출도 (등록 가능성 판정 근거)</span>
+            <span style="background:#27ae60;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">낼 만함</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span class="m-label">블로그 노출</span>
+              <span class="m-value" style="color:#27ae60;">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">상품 맥락</span>
+              <span class="m-value">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">뉴스</span>
+              <span class="m-value">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">국내 첫 등장</span>
+              <span class="m-value">확인 불가 (검색 노이즈)</span>
+            </div>
+          </div>
+          <p class="verdict">국내 노출 0건 — 거의 안 쓰이는 말입니다. 지금이 선점 적기입니다.</p>
+          
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="border-left:5px solid #e74c3c;">
+      <div class="card-header">
+        <div class="rank-box">
+          <span class="rank">#3</span>
+          <span class="tier" style="color:#e74c3c;">★★★</span>
+        </div>
+        <div class="term-box">
+          <h3>뷰티 프롬 위딘 <small>(Beauty-from-within)</small><span style="background:#2f81f7;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;margin-left:8px;vertical-align:middle;">NEW</span></h3>
+          <p class="summary">섭취형 미용 보충제 카테고리 총칭, 뉴트리코스메틱 시장의 핵심 키워드로 부상</p>
+        </div>
+        <div class="urgency-box"><span style="background:#f39c12;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">보통</span></div>
+      </div>
+      <div class="card-body">
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">🌍 해외 현황</span>
+            <p>Vitafoods Asia 2024에서 MintyBright Nu 론칭과 함께 핵심 카테고리 언어로 재부각.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">🇰🇷 국내 현황</span>
+            <p>국내에서는 이너뷰티·먹는 화장품으로 통용되나 영문 표기 상표 선점은 공백 상태.</p>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">📋 상표 전략</span>
+            <p>결합 상표 또는 한글 음차 '뷰티프롬위딘' 형태로 건강기능식품·화장품류 출원 검토 가능.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">💰 시장 잠재력</span>
+            <p>섭취형 미용 시장 연평균 두 자릿수 성장 지속으로 카테고리 브랜딩 수요 증가 예상.</p>
+          </div>
+        </div>
+        
+        <div class="domestic" style="border-left:3px solid #27ae60;">
+          <div class="domestic-head">
+            <span class="label">🔍 국내 노출도 (등록 가능성 판정 근거)</span>
+            <span style="background:#27ae60;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">낼 만함</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span class="m-label">블로그 노출</span>
+              <span class="m-value" style="color:#27ae60;">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">상품 맥락</span>
+              <span class="m-value">0건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">뉴스</span>
+              <span class="m-value">22건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">국내 첫 등장</span>
+              <span class="m-value">2025.10</span>
+            </div>
+          </div>
+          <p class="verdict">국내 노출 0건 — 거의 안 쓰이는 말입니다. 지금이 선점 적기입니다.</p>
+          
+        </div>
+      </div>
+    </div>
+
+    <div class="card" style="border-left:5px solid #e74c3c;">
+      <div class="card-header">
+        <div class="rank-box">
+          <span class="rank">#4</span>
+          <span class="tier" style="color:#e74c3c;">★★★</span>
+        </div>
+        <div class="term-box">
+          <h3>아커만시아 GLP-1 연동 <small>(Akkermansia muciniphila GLP-1)</small><span style="background:#2f81f7;color:#fff;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:bold;margin-left:8px;vertical-align:middle;">NEW</span></h3>
+          <p class="summary">아커만시아가 GLP-1·인슐린 분비에 영향, 일본·EU 기능성 표시 신청 움직임 시작</p>
+        </div>
+        <div class="urgency-box"><span style="background:#e74c3c;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">긴급</span></div>
+      </div>
+      <div class="card-body">
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">🌍 해외 현황</span>
+            <p>2025년 연구에서 GLP-1 연동 효과 확인, 검색량 전년 대비 53% 급증하며 차세대 프로바이오틱으로 주목.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">🇰🇷 국내 현황</span>
+            <p>균주명 자체는 상표 불가이나 GLP-1 지원 카테고리 개념어 조합 브랜드 선점 여지 있음.</p>
+          </div>
+        </div>
+        <div class="grid2">
+          <div class="info-item">
+            <span class="label">📋 상표 전략</span>
+            <p>균주명·성분명 직접 출원 불가이므로 GLP-1 연동 효능 개념을 담은 조어 브랜드 개발 후 출원 권장.</p>
+          </div>
+          <div class="info-item">
+            <span class="label">💰 시장 잠재력</span>
+            <p>GLP-1 시장 폭발적 성장과 맞물려 프로바이오틱스 카테고리 내 가장 빠른 성장 세그먼트로 부상.</p>
+          </div>
+        </div>
+        
+        <div class="domestic" style="border-left:3px solid #e74c3c;">
+          <div class="domestic-head">
+            <span class="label">🔍 국내 노출도 (등록 가능성 판정 근거)</span>
+            <span style="background:#e74c3c;color:#fff;padding:3px 10px;border-radius:20px;font-size:12px;font-weight:bold;">가능성 낮음</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span class="m-label">블로그 노출</span>
+              <span class="m-value" style="color:#e74c3c;">3,094건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">상품 맥락</span>
+              <span class="m-value">1,215건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">뉴스</span>
+              <span class="m-value">1,283건</span>
+            </div>
+            <div class="metric">
+              <span class="m-label">국내 첫 등장</span>
+              <span class="m-value">확인 불가 (검색 노이즈)</span>
+            </div>
+          </div>
+          <p class="verdict">성분·균주 이름이라 원재료 표시로 거절될 가능성이 높습니다(제33조1항3호). 등록되더라도 남이 제품에 쓰는 걸 막기는 어렵습니다(제90조).</p>
+          <p class="variant-note">⚠️ 표기 변형 <strong>‘아커만시아’</strong> 기준 수치입니다 — 심사는 발음이 같으면 같은 말로 봅니다.</p>
+        </div>
+      </div>
+    </div>
+
+</div>
+
+<div class="footer">
+  ⚠️ 본 리포트는 AI 분석 기반 참고자료입니다.<br>
+  등급은 <strong>국내 노출도에 근거한 참고 판단</strong>입니다. 심사관에 따라 결과가 갈릴 수 있으므로 최종 판단은 직접 하세요.<br>
+  출원 전 <strong>키프리스(KIPRIS)</strong> 검색 및 변리사 확인을 권합니다.<br><br>
+  Patent Name Finder &nbsp;|&nbsp; 2026-09-03 자동 생성
+</div>
+
+</body>
+</html>
