@@ -344,6 +344,12 @@ def _get_gugu_log_tabs() -> list:
     return _gugu_log_tabs
 
 
+def gugu_log_available() -> bool:
+    """공구 활동 로그를 실제로 읽을 수 있는 상태인지.
+    False면 공구 매출을 제외하지 못한 상태이므로 G(최종증감)를 확정하면 안 된다."""
+    return bool(_get_gugu_log_tabs())
+
+
 def _parse_gugu_log_period(s: str, year: int):
     """'26.6.1~6.7', '2026.4/1~4/7' 등 → (시작일, 종료일)"""
     nums = re.findall(r"\d+", s)
@@ -488,8 +494,14 @@ def run_once():
     if not SHEET_URL:
         print("[오류] .env에 SALES_CHECK_SHEET_URL이 없습니다.")
         return
-    if not GUGU_LOG_SHEET_URL:
-        print("  [안내] GUGU_LOG_SHEET_URL 미설정 → 공구 자동탐지 없이 진행")
+    # 공구 로그를 못 읽으면 공구 매출이 그대로 남은 채 계산된다.
+    # 그 상태로 G(최종증감=인센티브 정산값)를 확정해버리면 영구 고정되므로,
+    # 아래에서 G 확정만 보류하고 D/I/L 등 참고값만 갱신한다.
+    gugu_ok = gugu_log_available()
+    if not gugu_ok:
+        print("  ⚠️  [경고] 공구 활동 로그를 읽을 수 없습니다"
+              f" (GUGU_LOG_SHEET_URL {'미설정' if not GUGU_LOG_SHEET_URL else '접근실패'})."
+              " 공구 매출이 제외되지 않으므로 최종증감(G) 확정을 보류합니다.")
 
     gs = _get_gs_client()
     sheet_id = _extract_sheet_id(SHEET_URL)
@@ -548,10 +560,11 @@ def run_once():
         if promo_start > today:
             continue
 
-        # 종료된 행사 중 G열(최종증감)이 이미 있으면 재계산 스킵
+        # G열(최종증감)이 이미 있으면 재계산 스킵 — 인센티브 정산에 쓰이는 값이라
+        # 한번 확정되면 절대 변경하지 않는다 (아래 GRACE_DAYS 유예기간이 지나야 처음 기재됨)
         existing_g = str(row[6]).strip() if len(row) > 6 else ""
-        if promo_end < today and existing_g:
-            print(f"\n[행 {row_idx+1}] {title} — 종료+계산완료, 스킵")
+        if existing_g:
+            print(f"\n[행 {row_idx+1}] {title} — 계산완료(확정), 스킵")
             continue
 
         promo_total_days = (promo_end - promo_start).days + 1
@@ -662,6 +675,13 @@ def run_once():
 
         is_ended       = promo_end < today
         remaining_days = (promo_end - promo_actual_end).days
+        # 직원이 공구 활동 로그를 행사 종료 후 며칠(1~5일 사이) 늦게 등록하는 경우가 있어,
+        # 종료 직후 바로 G(최종증감)를 확정하면 그 공구가 O열에 반영되지 못한 채 영구 고정된다.
+        # → 종료 후 GRACE_DAYS 동안은 O열/I/L을 계속 최신 상태로 갱신만 하고 G는 비워두며,
+        #   유예기간이 지난 뒤 처음 기재되는 순간부터는 위 existing_g 스킵으로 영구 고정된다.
+        GRACE_DAYS    = 6
+        days_since_end = (today - promo_end).days
+        grace_elapsed  = is_ended and days_since_end >= GRACE_DAYS and gugu_ok
 
         if not is_ended:
             # 행사 진행 중: D(일평균증감) + E/F(예상) 표시, G(최종) 비워둠
@@ -669,13 +689,22 @@ def run_once():
             f_val = f"=E{sheet_row}-L{sheet_row}"          # F: 예상증감
             g_val = ""                                      # G: 최종증감 (종료후)
             print(f"  일평균증감: {(promo_net//elapsed_days - comp_net//promo_total_days):+,}원/일 | {remaining_days}일 남음")
+        elif not grace_elapsed:
+            # 행사 종료했지만 유예기간 중: O열/I/L만 최신화, G는 아직 확정하지 않음
+            e_val = ""
+            f_val = ""
+            g_val = ""
+            if not gugu_ok:
+                print(f"  종료(공구로그 미확인으로 확정 보류): 잠정증감 {promo_net - comp_net:+,}원")
+            else:
+                print(f"  종료(유예 중, {GRACE_DAYS - days_since_end}일 후 확정): 잠정증감 {promo_net - comp_net:+,}원")
         else:
-            # 행사 종료: G(최종증감) 표시, E/F(예상) 비워둠
+            # 유예기간 경과 → G(최종증감) 최초 확정 (이후로는 existing_g 스킵으로 영구 고정)
             e_val = ""
             f_val = ""
             g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 최종증감 (인센티브 정산용)
             ended_rows.append(sheet_row)
-            print(f"  최종증감: {promo_net - comp_net:+,}원")
+            print(f"  최종증감 확정: {promo_net - comp_net:+,}원")
 
         # A열 제목 끝에 업데이트 시간 기재
         now_kst = datetime.now(KST)
