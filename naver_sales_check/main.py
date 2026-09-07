@@ -103,8 +103,9 @@ def _apply_number_format(spreadsheet, ws, data_rows: int, ended_rows: list = Non
             }},
             "fields": "userEnteredFormat.numberFormat",
         }})
-    # G열 주황색: 행사 종료 후 최종증감이 기재된 행만
-    ORANGE = {"red": 1.0, "green": 0.6, "blue": 0.0}
+    # G열 주황색: 행사 종료 후 최종증감이 확정된 행만
+    # 색상은 시트에서 직원이 기존에 쓰던 #FF6D01(헤더 G1 및 2~5행과 동일)에 맞춤
+    ORANGE = {"red": 1.0, "green": 0.42745098, "blue": 0.003921569}
     for row_1idx in (ended_rows or []):
         R.append({"repeatCell": {
             "range": {
