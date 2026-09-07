@@ -61,6 +61,14 @@ STORE_MAP = {
 SALE_STATUSES = {"PAYED", "DELIVERING", "DELIVERED", "PURCHASE_DECIDED"}
 KST = timezone(timedelta(hours=9))
 
+# 행사 종료 후 G(최종증감)를 확정하기까지의 유예일수.
+# 직원이 공구 활동 로그를 종료 후 며칠 늦게 등록하는 경우가 있어, 그 사이에는
+# G를 "잠정값"으로 매일 갱신만 하고 확정(주황색)하지 않는다.
+GRACE_DAYS = 6
+# 확정 실행일(종료+GRACE_DAYS)을 며칠 놓쳐도 주황색 확정이 되도록 잠금은 조금 뒤에 건다.
+# 이 날짜를 넘기고 G에 값이 있으면 인센티브 정산값으로 보고 두 번 다시 건드리지 않는다.
+LOCK_DAYS = GRACE_DAYS + 3
+
 # 공구 활동 로그의 상품링크는 영문 스토어명(nutone/jdhealth/nutpet)을 사용
 STORE_SLUG = {"뉴트원": "nutone", "제이디": "jdhealth", "넛펫": "nutpet"}
 
@@ -561,10 +569,11 @@ def run_once():
         if promo_start > today:
             continue
 
-        # G열(최종증감)이 이미 있으면 재계산 스킵 — 인센티브 정산에 쓰이는 값이라
-        # 한번 확정되면 절대 변경하지 않는다 (아래 GRACE_DAYS 유예기간이 지나야 처음 기재됨)
-        existing_g = str(row[6]).strip() if len(row) > 6 else ""
-        if existing_g:
+        # 확정이 끝난 행은 재계산 스킵 — 인센티브 정산에 쓰이는 값이라 두 번 다시 건드리지 않는다.
+        # 유예기간(종료 후 LOCK_DAYS일) 안이면 G에 값이 있어도 잠정값이므로 계속 갱신한다.
+        existing_g     = str(row[6]).strip() if len(row) > 6 else ""
+        days_since_end = (today - promo_end).days
+        if existing_g and days_since_end > LOCK_DAYS:
             print(f"\n[행 {row_idx+1}] {title} — 계산완료(확정), 스킵")
             continue
 
@@ -678,11 +687,9 @@ def run_once():
         remaining_days = (promo_end - promo_actual_end).days
         # 직원이 공구 활동 로그를 행사 종료 후 며칠(1~5일 사이) 늦게 등록하는 경우가 있어,
         # 종료 직후 바로 G(최종증감)를 확정하면 그 공구가 O열에 반영되지 못한 채 영구 고정된다.
-        # → 종료 후 GRACE_DAYS 동안은 O열/I/L을 계속 최신 상태로 갱신만 하고 G는 비워두며,
-        #   유예기간이 지난 뒤 처음 기재되는 순간부터는 위 existing_g 스킵으로 영구 고정된다.
-        GRACE_DAYS    = 6
-        days_since_end = (today - promo_end).days
-        grace_elapsed  = is_ended and days_since_end >= GRACE_DAYS and gugu_ok
+        # → 종료 후 GRACE_DAYS 동안은 G를 "잠정값"(흰 배경)으로 매일 갱신만 하고,
+        #   유예가 지나면 그때 값으로 확정(주황 배경)한 뒤 다시 건드리지 않는다.
+        grace_elapsed = is_ended and days_since_end >= GRACE_DAYS
 
         if not is_ended:
             # 행사 진행 중: D(일평균증감) + E/F(예상) 표시, G(최종) 비워둠
@@ -690,15 +697,19 @@ def run_once():
             f_val = f"=E{sheet_row}-L{sheet_row}"          # F: 예상증감
             g_val = ""                                      # G: 최종증감 (종료후)
             print(f"  일평균증감: {(promo_net//elapsed_days - comp_net//promo_total_days):+,}원/일 | {remaining_days}일 남음")
-        elif not grace_elapsed:
-            # 행사 종료했지만 유예기간 중: O열/I/L만 최신화, G는 아직 확정하지 않음
+        elif not gugu_ok:
+            # 공구 매출이 제외되지 않은 상태 → 잠정값조차 쓰지 않는다.
+            # (그대로 두면 유예가 지났을 때 틀린 값이 인센티브 정산값으로 고착됨)
             e_val = ""
             f_val = ""
             g_val = ""
-            if not gugu_ok:
-                print(f"  종료(공구로그 미확인으로 확정 보류): 잠정증감 {promo_net - comp_net:+,}원")
-            else:
-                print(f"  종료(유예 중, {GRACE_DAYS - days_since_end}일 후 확정): 잠정증감 {promo_net - comp_net:+,}원")
+            print(f"  종료(공구로그 미확인으로 기재 보류): 잠정증감 {promo_net - comp_net:+,}원")
+        elif not grace_elapsed:
+            # 행사 종료했지만 유예기간 중: G를 잠정값으로 매일 갱신 (배경 흰색 = 미확정)
+            e_val = ""
+            f_val = ""
+            g_val = f"=I{sheet_row}-L{sheet_row}"          # G: 잠정 최종증감
+            print(f"  종료(유예 중, {GRACE_DAYS - days_since_end}일 후 확정): 잠정증감 {promo_net - comp_net:+,}원")
         else:
             # 유예기간 경과 → G(최종증감) 최초 확정 (이후로는 existing_g 스킵으로 영구 고정)
             e_val = ""
