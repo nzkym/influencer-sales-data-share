@@ -1144,7 +1144,7 @@ def _write_pharmabros_revenue_to_i(campaign):
         print(f"  [파마브로스] I열 기재 실패: {e}")
 
 
-def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list, date_from: str = ""):
+def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list, date_from: str = "", date_to: str = ""):
     """파마브로스정산 탭에 Drive xlsx + 고정가격 기록."""
     try:
         creds = Credentials.from_service_account_file(CREDENTIALS_PATH, scopes=SCOPES)
@@ -1162,13 +1162,22 @@ def _write_pharmabros_settlement(title: str, settlement: int, xlsx_rows: list, d
 
         existing = pb_ws.get_all_values()
         new_rows = [HEADER]
+        _dt = date_to or date_from  # date_to 없으면 date_from으로 fallback
         for r in existing[1:]:
-            # title + 시작일 조합으로 해당 캠페인 행만 제거 (같은 제목의 다른 캠페인 보존)
+            # title + 시작일(신버전) 또는 주문일시 범위(구버전) 조합으로 해당 캠페인 행만 제거
             if r:
                 row_title = str(r[0]).strip()
-                row_date  = str(r[1]).strip() if len(r) > 1 else ""
-                same_campaign = (row_title == title and
-                                 (not date_from or not row_date or row_date == date_from))
+                row_col1  = str(r[1]).strip() if len(r) > 1 else ""
+                is_new_fmt = bool(re.match(r'^\d{4}-\d{2}-\d{2}$', row_col1))
+                if is_new_fmt:
+                    # 신버전: col[1]이 시작일(YYYY-MM-DD)
+                    same_campaign = (row_title == title and
+                                     (not date_from or not row_col1 or row_col1 == date_from))
+                else:
+                    # 구버전: col[1]이 주문번호 — col[2][:10]이 주문일시
+                    od = str(r[2])[:10] if len(r) > 2 else ""
+                    same_campaign = (row_title == title and
+                                     (not date_from or not od or (date_from <= od <= _dt)))
                 if not same_campaign:
                     new_rows.append(r)
 
@@ -1271,7 +1280,7 @@ def _backfill_pharmabros_settlements():
         _write_pharmabros_revenue_to_i(campaign)
         settlement, breakdown = _calc_pharmabros_settlement(campaign)
         if settlement > 0:
-            _write_pharmabros_settlement(title, settlement, breakdown, campaign.get("date_from", ""))
+            _write_pharmabros_settlement(title, settlement, breakdown, campaign.get("date_from", ""), campaign.get("date_to", ""))
             processed += 1
 
     if processed:
@@ -2007,7 +2016,7 @@ def _run_pharmabros_if_needed(force: bool = False):
                 _write_pharmabros_revenue_to_i(campaign)
                 settlement, breakdown = _calc_pharmabros_settlement(campaign)
                 if settlement > 0:
-                    _write_pharmabros_settlement(title, settlement, breakdown, campaign.get("date_from", ""))
+                    _write_pharmabros_settlement(title, settlement, breakdown, campaign.get("date_from", ""), campaign.get("date_to", ""))
 
         except Exception as e:
             print(f"  [파마브로스 오류] {e}")
