@@ -33,6 +33,8 @@ import requests
 import bcrypt
 import base64
 
+import dashboard   # 진행행사 한눈그래프 탭
+
 BASE_DIR = Path(__file__).parent
 load_dotenv(BASE_DIR / ".env")
 
@@ -490,6 +492,120 @@ def make_formula(raw: int, deductions: list) -> object:
     if not deductions:
         return raw
     return "=" + str(raw) + "".join(f"-{d}" for d in deductions)
+
+
+# ── 진행행사 한눈그래프 탭 ────────────────────────────────
+
+def _parse_money(s) -> int:
+    """'36,228,200' → 36228200 (빈칸/기호는 0)"""
+    digits = re.sub(r"[^\d-]", "", str(s))
+    try:
+        return int(digits)
+    except ValueError:
+        return 0
+
+
+def build_dashboard(spreadsheet, all_values: list):
+    """가장 최근에 시작된 행사 1건을 골라 '진행행사 한눈그래프' 탭을 다시 그린다.
+
+    새 행사가 시작되면 대상 행이 바뀌므로 탭 내용이 통째로 교체된다.
+    """
+    today     = datetime.now(KST).date()
+    yesterday = today - timedelta(days=1)
+
+    # ── 대상 행사 고르기: 이미 시작된 행사 중 시작일이 가장 늦은 것 ──
+    target = None
+    for row_idx, row in enumerate(all_values):
+        if row_idx == 0 or len(row) < 3:
+            continue
+        title     = str(row[0]).strip()
+        start_raw = str(row[1]).strip()
+        end_raw   = str(row[2]).strip()
+        store_raw = str(row[13]).strip() if len(row) > 13 else ""
+        if not (title and start_raw and end_raw and store_raw):
+            continue
+        try:
+            p_start = parse_date(start_raw)
+            p_end   = parse_date(end_raw)
+        except Exception:
+            continue
+        if p_start > today:
+            continue
+        if target is None or p_start >= target["start"]:
+            target = {
+                "row": row_idx + 1, "title": title, "store": store_raw,
+                "start": p_start, "end": p_end, "raw": row,
+            }
+
+    if not target:
+        print("\n[한눈그래프] 대상 행사가 없어 건너뜁니다.")
+        return
+
+    creds_pair = STORE_MAP.get(target["store"].lower()) or STORE_MAP.get(target["store"])
+    if not creds_pair or not creds_pair[0]:
+        print(f"\n[한눈그래프] '{target['store']}' API 키 없음 — 건너뜁니다.")
+        return
+
+    row = target["raw"]
+    exclude_ids = parse_product_ids(row[14] if len(row) > 14 else "")
+
+    actual_end = min(target["end"], yesterday)
+    if actual_end < target["start"]:
+        print("\n[한눈그래프] 아직 집계할 날짜가 없어 건너뜁니다.")
+        return
+
+    title_base = re.sub(r"\s*\[업데이트:\s*\d+\.\d+\s+\d+:\d+\]$", "", target["title"])
+    total_days = (target["end"] - target["start"]).days + 1
+    elapsed    = (actual_end - target["start"]).days + 1
+
+    if target["end"] >= today:
+        status_text = f"🔵 행사 진행 중 · {elapsed}일차 / 총 {total_days}일"
+    else:
+        status_text = f"✅ 행사 종료 · 총 {total_days}일"
+
+    promo_sales = _parse_money(row[8] if len(row) > 8 else "")
+    comp_sales  = _parse_money(row[11] if len(row) > 11 else "")
+    if promo_sales and comp_sales:
+        diff = promo_sales - comp_sales
+        pct  = diff / comp_sales * 100
+        # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다
+        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "―")
+        diff_text = f"{arrow} {abs(diff):,}원 ({abs(pct):.0f}%)"
+    else:
+        diff_text = "집계 중"
+
+    print(f"\n[한눈그래프] '{title_base}' ({target['store']}) "
+          f"{target['start']}~{actual_end} · 공구 {len(exclude_ids)}개 제외")
+
+    try:
+        token = _get_access_token(*creds_pair)
+    except Exception as e:
+        print(f"  [한눈그래프] 인증 실패: {e}")
+        return
+
+    headers_auth = {"Authorization": f"Bearer {token}"}
+    orders = dashboard.fetch_orders(
+        headers_auth, NAVER_BASE, SALE_STATUSES,
+        target["start"], actual_end, set(exclude_ids),
+    )
+    if not orders:
+        print("  [한눈그래프] 수집된 주문이 없어 건너뜁니다.")
+        return
+
+    agg = dashboard.summarize(orders)
+    promo_info = {
+        "title": title_base,
+        "store": target["store"],
+        "start": target["start"],
+        "end": target["end"],
+        "total_days": total_days,
+        "status_text": status_text,
+        "diff_text": diff_text,
+        "updated_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M") + " (KST)",
+    }
+    tab = dashboard.write_dashboard(spreadsheet, promo_info, agg, exclude_ids)
+    print(f"  ✅ '{tab}' 탭 갱신 완료 — 제품 {len(agg['products'])}종 / "
+          f"주문 {sum(p['orders'] for p in agg['products']):,}건")
 
 
 # ── 메인 실행 ─────────────────────────────────────────────
