@@ -899,6 +899,12 @@ def run_once():
     else:
         print(f"\n업데이트할 행이 없습니다. ({update_time})")
 
+    # 진행 중(또는 가장 최근) 행사의 제품별 판매 현황을 '진행행사 한눈그래프' 탭에 갱신
+    try:
+        build_dashboard(spreadsheet, ws.get_all_values())
+    except Exception as e:
+        print(f"\n[한눈그래프] 생성 실패: {e}")
+
     print(f"{'='*55}\n")
 
 
