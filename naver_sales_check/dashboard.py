@@ -18,6 +18,18 @@ import requests
 
 TAB_TITLE = "진행행사 한눈그래프"
 
+# 직원이 이 탭의 동작 방식을 알 수 있도록 6행에 항상 적어두는 안내문
+GUIDE_TEXT = (
+    "ℹ️ 이 탭은 자동으로 만들어집니다 — 매일 오전 9시에 '시트1'에서 "
+    "가장 최근에 시작된 행사 1건을 찾아 다시 그립니다.  "
+    "▸ 시트1에 새 행사(제목·시작일·종료일·판매처)를 넣으면, 시작 다음 날 아침부터 "
+    "이 탭이 새 행사 내용으로 자동 교체됩니다 (시작 당일은 집계할 판매 데이터가 없어 "
+    "이전 행사가 그대로 보입니다).  "
+    "▸ 행사가 끝나도 다음 행사가 시작될 때까지는 계속 유지됩니다.  "
+    "▸ 이 탭을 직접 고쳐도 다음 자동 실행 때 덮어써지니, 수정은 시트1에서 해주세요."
+)
+
+
 # 담당자 요청으로 '이 탭에서만' 빼는 제품 (행사 제목 → 짧은 제품명 목록).
 # 시트1의 매출/증감/최종증감 계산에는 전혀 영향을 주지 않는다.
 # 새 행사가 시작되면 제목이 달라지므로 자동으로 적용이 끝난다.
@@ -331,7 +343,7 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
             f"(같은 {n_days}일 · 매출 {promo['comp_total']:,}원)"
             if promo.get("comp_text") else "")],
         [excl_txt],
-        [""],
+        [GUIDE_TEXT],
         # A+B 병합해서 총매출을 넓게 — 나머지는 C~G
         ["총 매출", "", "총 주문수", "총 상품수량", "하루 평균 매출",
          "판매 제품종류", "비교기간 대비"],
@@ -401,6 +413,24 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
             "textFormat": {"bold": True, "fontSize": 14},
             "backgroundColor": _TITLE_BG, "verticalAlignment": "MIDDLE"}},
         "fields": "userEnteredFormat(textFormat,backgroundColor,verticalAlignment)",
+    }})
+    # 6행 안내문 — 눈에 띄되 데이터와 구분되게
+    R.append({"mergeCells": {"range": _rng(sid, 6, 1, 6, 7),
+                             "mergeType": "MERGE_ALL"}})
+    R.append({"repeatCell": {
+        "range": _rng(sid, 6, 1, 6, 7),
+        "cell": {"userEnteredFormat": {
+            "textFormat": {"fontSize": 9,
+                           "foregroundColor": {"red": 0.20, "green": 0.33, "blue": 0.52}},
+            "backgroundColor": {"red": 0.90, "green": 0.94, "blue": 0.99},
+            "wrapStrategy": "WRAP", "verticalAlignment": "MIDDLE"}},
+        "fields": ("userEnteredFormat(textFormat,backgroundColor,"
+                   "wrapStrategy,verticalAlignment)"),
+    }})
+    R.append({"updateDimensionProperties": {
+        "range": {"sheetId": sid, "dimension": "ROWS",
+                  "startIndex": 5, "endIndex": 6},
+        "properties": {"pixelSize": 58}, "fields": "pixelSize",
     }})
     R.append({"repeatCell": {
         "range": _rng(sid, 2, 1, 5, 7),

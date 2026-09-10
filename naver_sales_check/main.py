@@ -505,15 +505,12 @@ def _parse_money(s) -> int:
         return 0
 
 
-def build_dashboard(spreadsheet, all_values: list):
-    """가장 최근에 시작된 행사 1건을 골라 '진행행사 한눈그래프' 탭을 다시 그린다.
+def pick_current_promo(all_values: list, today: date):
+    """시트1 행 목록에서 '한눈그래프에 보여줄 행사' 1건을 고른다.
 
-    새 행사가 시작되면 대상 행이 바뀌므로 탭 내용이 통째로 교체된다.
+    이미 시작된 행사 중 시작일이 가장 늦은 것 = 진행 중이거나 가장 최근 행사.
+    새 행사가 시작되면 자동으로 그 행사로 대상이 바뀐다.
     """
-    today     = datetime.now(KST).date()
-    yesterday = today - timedelta(days=1)
-
-    # ── 대상 행사 고르기: 이미 시작된 행사 중 시작일이 가장 늦은 것 ──
     target = None
     for row_idx, row in enumerate(all_values):
         if row_idx == 0 or len(row) < 3:
@@ -529,14 +526,25 @@ def build_dashboard(spreadsheet, all_values: list):
             p_end   = parse_date(end_raw)
         except Exception:
             continue
-        if p_start > today:
+        if p_start > today:          # 아직 시작 안 한 행사는 대상 아님
             continue
         if target is None or p_start >= target["start"]:
             target = {
                 "row": row_idx + 1, "title": title, "store": store_raw,
                 "start": p_start, "end": p_end, "raw": row,
             }
+    return target
 
+
+def build_dashboard(spreadsheet, all_values: list):
+    """가장 최근에 시작된 행사 1건을 골라 '진행행사 한눈그래프' 탭을 다시 그린다.
+
+    새 행사가 시작되면 대상 행이 바뀌므로 탭 내용이 통째로 교체된다.
+    """
+    today     = datetime.now(KST).date()
+    yesterday = today - timedelta(days=1)
+
+    target = pick_current_promo(all_values, today)
     if not target:
         print("\n[한눈그래프] 대상 행사가 없어 건너뜁니다.")
         return
