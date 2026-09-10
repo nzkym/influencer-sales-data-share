@@ -18,6 +18,30 @@ import requests
 
 TAB_TITLE = "진행행사 한눈그래프"
 
+# 담당자 요청으로 '이 탭에서만' 빼는 제품 (행사 제목 → 짧은 제품명 목록).
+# 시트1의 매출/증감/최종증감 계산에는 전혀 영향을 주지 않는다.
+# 새 행사가 시작되면 제목이 달라지므로 자동으로 적용이 끝난다.
+DASHBOARD_ONLY_EXCLUDE = {
+    "2026추석세일(뉴트원 브스)": ["액상 마그네슘 액티브"],   # 2026-09-10 요청, 이번 행사만
+}
+
+
+def apply_manual_exclude(rows: list, promo_title: str) -> tuple:
+    """DASHBOARD_ONLY_EXCLUDE 에 걸린 제품을 걸러낸다. (남은행, 빠진제품명 목록)"""
+    targets = DASHBOARD_ONLY_EXCLUDE.get(promo_title.strip())
+    if not targets:
+        return rows, []
+    tset = {t.strip() for t in targets}
+    kept, dropped = [], set()
+    for r in rows:
+        name = short_name(r["name"])
+        if name in tset:
+            dropped.add(name)
+            continue
+        kept.append(r)
+    return kept, sorted(dropped)
+
+
 # 표시용 짧은 제품명을 만들 때 지워낼 브랜드명
 _BRANDS = ["뉴트원", "뉴트키즈", "넛펫", "정담건강", "뉴트메디"]
 
@@ -285,17 +309,24 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
                     f"({head}{more})")
     else:
         excl_txt = "⚠️ 이 기간에 겹치는 공구 상품은 없습니다 (전체 판매 실적)"
+    if promo.get("manual_excluded"):
+        excl_txt += ("   ·   담당자 요청으로 제외: "
+                     + ", ".join(promo["manual_excluded"]))
 
     rows = [
         [f"📊 {promo['title']}", "", "", "", "", promo["status_text"]],
         [f"마지막 업데이트: {promo['updated_at']}"],
         [f"📅 행사기간: {period_txt}"],
-        [f"🏪 판매처: {promo['store']}"],
+        [f"🏪 판매처: {promo['store']}"
+         + (f"      ⚖️ 비교기간: {promo['comp_text']} "
+            f"(같은 {n_days}일 · 매출 {promo['comp_total']:,}원)"
+            if promo.get("comp_text") else "")],
         [excl_txt],
         [""],
-        ["총 매출", "총 주문수", "총 상품수량", "하루 평균 매출",
-         "판매된 제품종류", "비교기간 대비"],
-        [tot_amount, tot_orders, tot_qty, tot_amount // n_days,
+        # A+B 병합해서 총매출을 넓게 — 나머지는 C~G
+        ["총 매출", "", "총 주문수", "총 상품수량", "하루 평균 매출",
+         "판매 제품종류", "비교기간 대비"],
+        [tot_amount, "", tot_orders, tot_qty, tot_amount // n_days,
          len(products), promo["diff_text"]],
         [""],
         ["🏆 제품별 실적 — 어떤 제품이 얼마나 팔렸는지 (매출 높은 순)"],
@@ -366,27 +397,42 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
                                        "backgroundColor": _TITLE_BG}},
         "fields": "userEnteredFormat(textFormat,backgroundColor)",
     }})
+    for r0, c0 in ((7, 1), (8, 1)):
+        R.append({"mergeCells": {"range": _rng(sid, r0, c0, r0, 2),
+                                 "mergeType": "MERGE_ALL"}})
     R.append({"repeatCell": {
-        "range": _rng(sid, 7, 1, 7, 6),
+        "range": _rng(sid, 7, 1, 7, 7),
         "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True, "fontSize": 10, "foregroundColor": _WHITE},
-            "backgroundColor": _HDR_BG, "horizontalAlignment": "CENTER"}},
-        "fields": "userEnteredFormat(textFormat,backgroundColor,horizontalAlignment)",
+            "backgroundColor": _HDR_BG, "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP"}},
+        "fields": ("userEnteredFormat(textFormat,backgroundColor,"
+                   "horizontalAlignment,verticalAlignment,wrapStrategy)"),
     }})
     R.append({"repeatCell": {
-        "range": _rng(sid, 8, 1, 8, 6),
+        "range": _rng(sid, 8, 1, 8, 7),
         "cell": {"userEnteredFormat": {
             "textFormat": {"bold": True, "fontSize": 13},
             "backgroundColor": _KPI_BG, "horizontalAlignment": "CENTER",
+            "verticalAlignment": "MIDDLE", "wrapStrategy": "WRAP",
             "numberFormat": {"type": "NUMBER", "pattern": "#,##0"}}},
-        "fields": ("userEnteredFormat(textFormat,backgroundColor,"
-                   "horizontalAlignment,numberFormat)"),
+        "fields": ("userEnteredFormat(textFormat,backgroundColor,horizontalAlignment,"
+                   "verticalAlignment,wrapStrategy,numberFormat)"),
     }})
+    # 비교기간 대비(G8)는 글자라서 숫자서식을 풀어준다
     R.append({"repeatCell": {
-        "range": _rng(sid, 8, 6, 8, 6),
-        "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"}}},
-        "fields": "userEnteredFormat.numberFormat",
+        "range": _rng(sid, 8, 7, 8, 7),
+        "cell": {"userEnteredFormat": {"numberFormat": {"type": "TEXT"},
+                                       "textFormat": {"bold": True, "fontSize": 11}}},
+        "fields": "userEnteredFormat(numberFormat,textFormat)",
     }})
+    # KPI 두 줄은 넉넉한 높이로
+    for r0, px in ((7, 34), (8, 40)):
+        R.append({"updateDimensionProperties": {
+            "range": {"sheetId": sid, "dimension": "ROWS",
+                      "startIndex": r0 - 1, "endIndex": r0},
+            "properties": {"pixelSize": px}, "fields": "pixelSize",
+        }})
     R.append({"repeatCell": {
         "range": _rng(sid, 10, 1, 10, 7),
         "cell": {"userEnteredFormat": {"textFormat": {"bold": True, "fontSize": 12}}},
@@ -445,8 +491,24 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
         "fields": "userEnteredFormat.textFormat",
     }})
 
-    for col, width in [(1, 50), (2, 235), (3, 80), (4, 90), (5, 115),
-                       (6, 85), (7, 145)]:
+    # 제품표 헤더도 줄바꿈 허용 (좁은 열에서 글자가 잘리지 않도록)
+    R.append({"repeatCell": {
+        "range": _rng(sid, PROD_HDR, 1, PROD_HDR, 7),
+        "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP",
+                                       "verticalAlignment": "MIDDLE"}},
+        "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)",
+    }})
+    if products:
+        # 긴 제품명은 잘리지 말고 줄바꿈되게
+        R.append({"repeatCell": {
+            "range": _rng(sid, PROD_1, 2, PROD_N, 2),
+            "cell": {"userEnteredFormat": {"wrapStrategy": "WRAP",
+                                           "verticalAlignment": "MIDDLE"}},
+            "fields": "userEnteredFormat(wrapStrategy,verticalAlignment)",
+        }})
+
+    for col, width in [(1, 60), (2, 265), (3, 90), (4, 100), (5, 130),
+                       (6, 100), (7, 170)]:
         R.append({"updateDimensionProperties": {
             "range": {"sheetId": sid, "dimension": "COLUMNS",
                       "startIndex": col - 1, "endIndex": col},

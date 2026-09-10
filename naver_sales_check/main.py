@@ -563,16 +563,11 @@ def build_dashboard(spreadsheet, all_values: list):
     else:
         status_text = f"✅ 행사 종료 · 총 {total_days}일"
 
-    promo_sales = _parse_money(row[8] if len(row) > 8 else "")
-    comp_sales  = _parse_money(row[11] if len(row) > 11 else "")
-    if promo_sales and comp_sales:
-        diff = promo_sales - comp_sales
-        pct  = diff / comp_sales * 100
-        # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다
-        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "―")
-        diff_text = f"{arrow} {abs(diff):,}원 ({abs(pct):.0f}%)"
-    else:
-        diff_text = "집계 중"
+    # 비교기간: 시트1과 같은 방식(전주 같은 요일)으로 잡되, 집계일수만큼만 잘라
+    # 같은 일수끼리 비교한다 (행사 진행 중에도 공정한 비교가 되도록)
+    weeks_back = -(-total_days // 7)
+    comp_start = target["start"] - timedelta(weeks=weeks_back)
+    comp_end   = comp_start + timedelta(days=elapsed - 1)
 
     print(f"\n[한눈그래프] '{title_base}' ({target['store']}) "
           f"{target['start']}~{actual_end} · 공구 {len(exclude_ids)}개 제외")
@@ -592,8 +587,38 @@ def build_dashboard(spreadsheet, all_values: list):
         print("  [한눈그래프] 수집된 주문이 없어 건너뜁니다.")
         return
 
+    orders, manual_excluded = dashboard.apply_manual_exclude(orders, title_base)
+
+    # 비교기간도 행사기간과 똑같은 제외 기준으로 조회해야 같은 잣대로 비교된다
+    comp_orders = dashboard.fetch_orders(
+        headers_auth, NAVER_BASE, SALE_STATUSES,
+        comp_start, comp_end, set(exclude_ids),
+    )
+    comp_orders, _ = dashboard.apply_manual_exclude(comp_orders, title_base)
+    comp_total = sum(r["amount"] for r in comp_orders)
+
+    if manual_excluded:
+        print(f"  [한눈그래프] 담당자 요청 제외: {', '.join(manual_excluded)}")
+        if not orders:
+            print("  [한눈그래프] 제외 후 남은 주문이 없어 건너뜁니다.")
+            return
+
     agg = dashboard.summarize(orders)
+    promo_total = sum(r["amount"] for r in orders)
+    if comp_total:
+        diff = promo_total - comp_total
+        pct  = diff / comp_total * 100
+        # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다
+        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "―")
+        diff_text = f"{arrow} {abs(diff):,}원 ({abs(pct):.0f}%)"
+    else:
+        diff_text = "집계 중"
+
     promo_info = {
+        "manual_excluded": manual_excluded,
+        "comp_text": (f"{comp_start.year}.{comp_start.month}.{comp_start.day}"
+                      f"~{comp_end.month}.{comp_end.day}"),
+        "comp_total": comp_total,
         "title": title_base,
         "store": target["store"],
         "start": target["start"],
