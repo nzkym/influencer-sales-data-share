@@ -294,10 +294,18 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
     ws, R = _get_or_create_tab(spreadsheet)
     sid = ws.id
 
-    tot_amount = sum(p["amount"] for p in products)
-    tot_orders = sum(p["orders"] for p in products)
-    tot_qty = sum(p["qty"] for p in products)
     n_days = max(len(daily), 1)
+
+    # 표·그래프 합계 (요청받은 제품이 빠진 값 — 매출비중 계산에 쓴다)
+    tot_amount = sum(p["amount"] for p in products)
+
+    # 요약(7·8행)은 시트1과 같은 숫자를 쓴다
+    kpi = promo.get("kpi") or {
+        "amount": tot_amount,
+        "orders": sum(p["orders"] for p in products),
+        "qty": sum(p["qty"] for p in products),
+        "kinds": len(products),
+    }
 
     period_txt = (f"{promo['start'].year}.{promo['start'].month}.{promo['start'].day}"
                   f" ~ {promo['end'].month}.{promo['end'].day}"
@@ -310,8 +318,9 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
     else:
         excl_txt = "⚠️ 이 기간에 겹치는 공구 상품은 없습니다 (전체 판매 실적)"
     if promo.get("manual_excluded"):
-        excl_txt += ("   ·   담당자 요청으로 제외: "
-                     + ", ".join(promo["manual_excluded"]))
+        excl_txt += ("      ※ 아래 표·그래프에서만 제외: "
+                     + ", ".join(promo["manual_excluded"])
+                     + " (위 요약은 시트1과 같은 전체 기준)")
 
     rows = [
         [f"📊 {promo['title']}", "", "", "", "", promo["status_text"]],
@@ -326,10 +335,12 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
         # A+B 병합해서 총매출을 넓게 — 나머지는 C~G
         ["총 매출", "", "총 주문수", "총 상품수량", "하루 평균 매출",
          "판매 제품종류", "비교기간 대비"],
-        [tot_amount, "", tot_orders, tot_qty, tot_amount // n_days,
-         len(products), promo["diff_text"]],
+        [kpi["amount"], "", kpi["orders"], kpi["qty"],
+         kpi["amount"] // n_days, kpi["kinds"], promo["diff_text"]],
         [""],
-        ["🏆 제품별 실적 — 어떤 제품이 얼마나 팔렸는지 (매출 높은 순)"],
+        ["🏆 제품별 실적 — 어떤 제품이 얼마나 팔렸는지 (매출 높은 순)"
+         + (f"   ※ {', '.join(promo['manual_excluded'])} 제외"
+            if promo.get("manual_excluded") else "")],
         ["순위", "제품", "주문수", "상품수량", "매출", "매출비중", "가장 많이 나간 구성"],
     ]
     for i, p in enumerate(products, 1):

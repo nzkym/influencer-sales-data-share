@@ -563,11 +563,19 @@ def build_dashboard(spreadsheet, all_values: list):
     else:
         status_text = f"✅ 행사 종료 · 총 {total_days}일"
 
-    # 비교기간: 시트1과 같은 방식(전주 같은 요일)으로 잡되, 집계일수만큼만 잘라
-    # 같은 일수끼리 비교한다 (행사 진행 중에도 공정한 비교가 되도록)
-    weeks_back = -(-total_days // 7)
-    comp_start = target["start"] - timedelta(weeks=weeks_back)
-    comp_end   = comp_start + timedelta(days=elapsed - 1)
+    # 요약(7·8행)은 반드시 시트1과 같은 숫자를 써야 신뢰가 유지된다.
+    # → 매출/비교매출/비교일자는 시트1에서 그대로 읽어온다.
+    sheet_amount    = _parse_money(row[8]  if len(row) > 8  else "")   # I열 집계기간매출
+    sheet_comp      = _parse_money(row[11] if len(row) > 11 else "")   # L열 비교매출
+    sheet_comp_text = str(row[10]).strip() if len(row) > 10 else ""    # K열 비교일자
+    if sheet_amount and sheet_comp:
+        diff = sheet_amount - sheet_comp
+        pct  = diff / sheet_comp * 100
+        # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다
+        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "―")
+        diff_text = f"{arrow} {abs(diff):,}원 ({abs(pct):.0f}%)"
+    else:
+        diff_text = "집계 중"
 
     print(f"\n[한눈그래프] '{title_base}' ({target['store']}) "
           f"{target['start']}~{actual_end} · 공구 {len(exclude_ids)}개 제외")
@@ -587,38 +595,37 @@ def build_dashboard(spreadsheet, all_values: list):
         print("  [한눈그래프] 수집된 주문이 없어 건너뜁니다.")
         return
 
-    orders, manual_excluded = dashboard.apply_manual_exclude(orders, title_base)
+    # 요약(7·8행)용 전체 집계 — 공구만 뺀 상태 (시트1과 같은 기준)
+    kpi_amount = sum(r["amount"] for r in orders)
+    kpi_orders = len(orders)
+    kpi_qty    = sum(r["qty"] for r in orders)
+    kpi_kinds  = len({dashboard.short_name(r["name"]) for r in orders})
+    if sheet_amount and kpi_amount != sheet_amount:
+        print(f"  ⚠️ [한눈그래프] 자체집계({kpi_amount:,})와 시트1 I열({sheet_amount:,})이 "
+              f"다릅니다 — 요약은 시트1 값을 씁니다")
 
-    # 비교기간도 행사기간과 똑같은 제외 기준으로 조회해야 같은 잣대로 비교된다
-    comp_orders = dashboard.fetch_orders(
-        headers_auth, NAVER_BASE, SALE_STATUSES,
-        comp_start, comp_end, set(exclude_ids),
-    )
-    comp_orders, _ = dashboard.apply_manual_exclude(comp_orders, title_base)
-    comp_total = sum(r["amount"] for r in comp_orders)
+    # 표·그래프는 담당자가 제품 판매를 보려는 용도라 요청받은 제품만 뺀 사본으로 그린다
+    chart_orders, manual_excluded = dashboard.apply_manual_exclude(orders, title_base)
 
     if manual_excluded:
-        print(f"  [한눈그래프] 담당자 요청 제외: {', '.join(manual_excluded)}")
-        if not orders:
-            print("  [한눈그래프] 제외 후 남은 주문이 없어 건너뜁니다.")
-            return
+        print(f"  [한눈그래프] 표·그래프에서만 제외: {', '.join(manual_excluded)}")
 
-    agg = dashboard.summarize(orders)
-    promo_total = sum(r["amount"] for r in orders)
-    if comp_total:
-        diff = promo_total - comp_total
-        pct  = diff / comp_total * 100
-        # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다
-        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "―")
-        diff_text = f"{arrow} {abs(diff):,}원 ({abs(pct):.0f}%)"
-    else:
-        diff_text = "집계 중"
+    if not chart_orders:
+        print("  [한눈그래프] 제외 후 남은 주문이 없어 건너뜁니다.")
+        return
+    agg = dashboard.summarize(chart_orders)
 
     promo_info = {
         "manual_excluded": manual_excluded,
-        "comp_text": (f"{comp_start.year}.{comp_start.month}.{comp_start.day}"
-                      f"~{comp_end.month}.{comp_end.day}"),
-        "comp_total": comp_total,
+        "comp_text": sheet_comp_text,
+        "comp_total": sheet_comp,
+        # 요약(7·8행) — 시트1과 동일한 매출 기준
+        "kpi": {
+            "amount": sheet_amount or kpi_amount,
+            "orders": kpi_orders,
+            "qty": kpi_qty,
+            "kinds": kpi_kinds,
+        },
         "title": title_base,
         "store": target["store"],
         "start": target["start"],
