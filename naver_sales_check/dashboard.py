@@ -25,6 +25,8 @@ GUIDE_TEXT = (
     "▸ 시트1에 새 행사(제목·시작일·종료일·판매처)를 넣으면, 시작 다음 날 아침부터 "
     "이 탭이 새 행사 내용으로 자동 교체됩니다 (시작 당일은 집계할 판매 데이터가 없어 "
     "이전 행사가 그대로 보입니다).  "
+    "▸ 같은 날 시작한 행사가 여러 건이면(스토어 2곳 동시 진행 등) 합산해서 함께 보여줍니다 "
+    "— 이때 제품명 앞의 [뉴트원]/[정담] 이 판매처입니다.  "
     "▸ 행사가 끝나도 다음 행사가 시작될 때까지는 계속 유지됩니다.  "
     "▸ 이 탭을 직접 고쳐도 다음 자동 실행 때 덮어써지니, 수정은 시트1에서 해주세요."
 )
@@ -55,6 +57,10 @@ def apply_manual_exclude(rows: list, promo_title: str) -> tuple:
 
 
 # 표시용 짧은 제품명을 만들 때 지워낼 브랜드명
+# 스토어 코드 → 화면에 쓸 짧은 이름
+STORE_LABEL = {"nutone": "뉴트원", "jdhealth": "정담", "nutpet": "넛펫",
+               "nutmedi": "뉴트메디"}
+
 _BRANDS = ["뉴트원", "뉴트키즈", "넛펫", "정담건강", "뉴트메디"]
 
 # '350mg' '30정' '19종' 처럼 용량/규격을 나타내는 토큰 — 제품명은 여기서 끊는다
@@ -178,8 +184,12 @@ def fetch_orders(headers: dict, base_url: str, sale_statuses: set,
 
 # ── 집계 ───────────────────────────────────────────────────
 
-def summarize(rows: list) -> dict:
-    """제품별 / 날짜별 / 제품×날짜 집계"""
+def summarize(rows: list, with_store: bool = False) -> dict:
+    """제품별 / 날짜별 / 제품×날짜 집계.
+
+    with_store=True 면 제품명 앞에 '[뉴트원]' 처럼 스토어를 붙여 구분한다
+    (두 스토어가 같은 기간에 행사할 때 어느 쪽 제품인지 보이게).
+    """
     by_prod = defaultdict(lambda: {
         "orders": 0, "qty": 0, "amount": 0, "packs": defaultdict(int), "pids": set(),
     })
@@ -188,6 +198,8 @@ def summarize(rows: list) -> dict:
 
     for r in rows:
         key = short_name(r["name"])
+        if with_store and r.get("store"):
+            key = f"[{STORE_LABEL.get(r['store'], r['store'])}] {key}"
         p = by_prod[key]
         p["orders"] += 1
         p["qty"] += r["qty"]
@@ -339,18 +351,22 @@ def write_dashboard(spreadsheet, promo: dict, agg: dict, excluded_ids: list) -> 
         [f"마지막 업데이트: {promo['updated_at']}"],
         [f"📅 행사기간: {period_txt}"],
         [f"🏪 판매처: {promo['store']}"
+         + (f"  ({' / '.join(promo['store_lines'])})"
+            if promo.get("multi_store") and promo.get("store_lines") else "")
          + (f"      ⚖️ 비교기간: {promo['comp_text']} "
-            f"(같은 {n_days}일 · 매출 {promo['comp_total']:,}원)"
+            f"(매출 {promo['comp_total']:,}원)"
             if promo.get("comp_text") else "")],
         [excl_txt],
         [GUIDE_TEXT],
         # A+B 병합해서 총매출을 넓게 — 나머지는 C~G
         ["총 매출", "", "총 주문수", "총 상품수량", "하루 평균 매출",
-         "판매 제품종류", "비교기간 대비"],
+         "판매 제품종류", promo.get("diff_label", "비교기간 대비")],
         [kpi["amount"], "", kpi["orders"], kpi["qty"],
          kpi["amount"] // n_days, kpi["kinds"], promo["diff_text"]],
         [""],
         ["🏆 제품별 실적 — 어떤 제품이 얼마나 팔렸는지 (매출 높은 순)"
+         + ("   ※ 스토어 2곳 합산 — 제품명 앞 [뉴트원]/[정담] 이 판매처"
+            if promo.get("multi_store") else "")
          + (f"   ※ {', '.join(promo['manual_excluded'])} 제외"
             if promo.get("manual_excluded") else "")],
         ["순위", "제품", "주문수", "상품수량", "매출", "매출비중", "가장 많이 나간 구성"],

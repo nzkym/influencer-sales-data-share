@@ -505,13 +505,14 @@ def _parse_money(s) -> int:
         return 0
 
 
-def pick_current_promo(all_values: list, today: date):
-    """시트1 행 목록에서 '한눈그래프에 보여줄 행사' 1건을 고른다.
+def pick_current_promos(all_values: list, today: date) -> list:
+    """시트1에서 '한눈그래프에 보여줄 행사'를 고른다. 여러 스토어 동시 진행이면 전부 반환.
 
-    이미 시작된 행사 중 시작일이 가장 늦은 것 = 진행 중이거나 가장 최근 행사.
-    새 행사가 시작되면 자동으로 그 행사로 대상이 바뀐다.
+    규칙: 이미 시작된 행사 중 시작일이 가장 늦은 날을 잡고, **그 날 시작한 행사 전부**를
+    대상으로 한다. 스토어 2곳이 같은 날 시작하면 둘 다 잡히고, 한쪽이 먼저 끝나도
+    다음 행사가 시작될 때까지 둘 다 계속 보인다.
     """
-    target = None
+    rows = []
     for row_idx, row in enumerate(all_values):
         if row_idx == 0 or len(row) < 3:
             continue
@@ -528,122 +529,195 @@ def pick_current_promo(all_values: list, today: date):
             continue
         if p_start > today:          # 아직 시작 안 한 행사는 대상 아님
             continue
-        if target is None or p_start >= target["start"]:
-            target = {
-                "row": row_idx + 1, "title": title, "store": store_raw,
-                "start": p_start, "end": p_end, "raw": row,
-            }
-    return target
+        rows.append({
+            "row": row_idx + 1, "title": title, "store": store_raw,
+            "start": p_start, "end": p_end, "raw": row,
+        })
+
+    if not rows:
+        return []
+
+    latest = max(r["start"] for r in rows)
+    return sorted([r for r in rows if r["start"] == latest],
+                  key=lambda r: r["row"])
+
+
+def _common_title(titles: list) -> str:
+    """여러 행사 제목의 공통 부분을 뽑는다. '2026추석세일(뉴트원 브스)' 등 → '2026추석세일'"""
+    if len(titles) == 1:
+        return titles[0]
+    first = titles[0]
+    n = len(first)
+    for t in titles[1:]:
+        n = min(n, len(t))
+        while n > 0 and first[:n] != t[:n]:
+            n -= 1
+    common = first[:n]
+    if common.count("(") > common.count(")"):      # '2026추석세일(뉴트원' 같은 반쪽 괄호 제거
+        common = common[:common.rfind("(")]
+    common = common.strip(" ([-·,/")
+    return common if len(common) >= 2 else titles[0]
 
 
 def build_dashboard(spreadsheet, all_values: list):
-    """가장 최근에 시작된 행사 1건을 골라 '진행행사 한눈그래프' 탭을 다시 그린다.
+    """진행 중인(또는 가장 최근) 행사를 '진행행사 한눈그래프' 탭에 다시 그린다.
 
-    새 행사가 시작되면 대상 행이 바뀌므로 탭 내용이 통째로 교체된다.
+    스토어 2곳 이상이 같은 기간에 행사를 하면 합산해서 한 화면으로 보여주고,
+    제품 표에는 어느 스토어 제품인지 함께 표시한다.
+    새 행사가 시작되면 대상이 바뀌므로 탭 내용이 통째로 교체된다.
     """
     today     = datetime.now(KST).date()
     yesterday = today - timedelta(days=1)
 
-    target = pick_current_promo(all_values, today)
-    if not target:
+    targets = pick_current_promos(all_values, today)
+    if not targets:
         print("\n[한눈그래프] 대상 행사가 없어 건너뜁니다.")
         return
 
-    creds_pair = STORE_MAP.get(target["store"].lower()) or STORE_MAP.get(target["store"])
-    if not creds_pair or not creds_pair[0]:
-        print(f"\n[한눈그래프] '{target['store']}' API 키 없음 — 건너뜁니다.")
-        return
+    titles = [re.sub(r"\s*\[업데이트:\s*\d+\.\d+\s+\d+:\d+\]$", "", t["title"])
+              for t in targets]
+    title_base = _common_title(titles)
 
-    row = target["raw"]
-    exclude_ids = parse_product_ids(row[14] if len(row) > 14 else "")
-
-    actual_end = min(target["end"], yesterday)
-    if actual_end < target["start"]:
+    start_all = min(t["start"] for t in targets)
+    end_all   = max(t["end"] for t in targets)
+    actual_end = min(end_all, yesterday)
+    if actual_end < start_all:
         print("\n[한눈그래프] 아직 집계할 날짜가 없어 건너뜁니다.")
         return
 
-    title_base = re.sub(r"\s*\[업데이트:\s*\d+\.\d+\s+\d+:\d+\]$", "", target["title"])
-    total_days = (target["end"] - target["start"]).days + 1
-    elapsed    = (actual_end - target["start"]).days + 1
-
-    if target["end"] >= today:
+    total_days = (end_all - start_all).days + 1
+    elapsed    = (actual_end - start_all).days + 1
+    if end_all >= today:
         status_text = f"🔵 행사 진행 중 · {elapsed}일차 / 총 {total_days}일"
     else:
         status_text = f"✅ 행사 종료 · 총 {total_days}일"
 
-    # 요약(7·8행)은 반드시 시트1과 같은 숫자를 써야 신뢰가 유지된다.
-    # → 매출/비교매출/비교일자는 시트1에서 그대로 읽어온다.
-    sheet_amount    = _parse_money(row[8]  if len(row) > 8  else "")   # I열 집계기간매출
-    sheet_comp      = _parse_money(row[11] if len(row) > 11 else "")   # L열 비교매출
-    sheet_comp_text = str(row[10]).strip() if len(row) > 10 else ""    # K열 비교일자
-    if sheet_amount and sheet_comp:
-        diff = sheet_amount - sheet_comp
-        pct  = diff / sheet_comp * 100
-        # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다
-        arrow = "▲" if diff > 0 else ("▼" if diff < 0 else "―")
-        diff_text = f"{arrow} {abs(diff):,}원 ({abs(pct):.0f}%)"
-    else:
-        diff_text = "집계 중"
+    print(f"\n[한눈그래프] '{title_base}' — 대상 {len(targets)}건 "
+          f"({', '.join(t['store'] for t in targets)}) {start_all}~{actual_end}")
 
-    print(f"\n[한눈그래프] '{title_base}' ({target['store']}) "
-          f"{target['start']}~{actual_end} · 공구 {len(exclude_ids)}개 제외")
+    all_orders   = []          # 표·그래프용 (스토어 표시 포함)
+    kpi_amount   = 0           # 자체집계 합계 (시트1 대조용)
+    sheet_amount = 0           # 시트1 I열 합계
+    sheet_comp   = 0           # 시트1 L열 합계
+    sheet_davg   = 0           # 시트1 D열(일평균증감) 합계
+    comp_texts   = []
+    exclude_all  = []
+    store_lines  = []          # 스토어별 한 줄 요약
+    manual_excluded = []
 
-    try:
-        token = _get_access_token(*creds_pair)
-    except Exception as e:
-        print(f"  [한눈그래프] 인증 실패: {e}")
-        return
+    for t in targets:
+        creds_pair = STORE_MAP.get(t["store"].lower()) or STORE_MAP.get(t["store"])
+        if not creds_pair or not creds_pair[0]:
+            print(f"  [한눈그래프] '{t['store']}' API 키 없음 — 이 행은 건너뜁니다.")
+            continue
 
-    headers_auth = {"Authorization": f"Bearer {token}"}
-    orders = dashboard.fetch_orders(
-        headers_auth, NAVER_BASE, SALE_STATUSES,
-        target["start"], actual_end, set(exclude_ids),
-    )
-    if not orders:
+        row = t["raw"]
+        exclude_ids = parse_product_ids(row[14] if len(row) > 14 else "")
+        exclude_all.extend(exclude_ids)
+
+        t_end = min(t["end"], yesterday)
+        if t_end < t["start"]:
+            continue
+
+        try:
+            token = _get_access_token(*creds_pair)
+        except Exception as e:
+            print(f"  [한눈그래프] {t['store']} 인증 실패: {e}")
+            continue
+
+        orders = dashboard.fetch_orders(
+            {"Authorization": f"Bearer {token}"}, NAVER_BASE, SALE_STATUSES,
+            t["start"], t_end, set(exclude_ids),
+        )
+        for o in orders:
+            o["store"] = t["store"]
+        all_orders.extend(orders)
+
+        s_amt  = _parse_money(row[8]  if len(row) > 8  else "")
+        s_comp = _parse_money(row[11] if len(row) > 11 else "")
+        s_davg = _parse_money(row[3]  if len(row) > 3  else "")   # D열 일평균증감
+        c_text = str(row[10]).strip() if len(row) > 10 else ""
+        own    = sum(o["amount"] for o in orders)
+
+        sheet_amount += s_amt
+        sheet_comp   += s_comp
+        sheet_davg   += s_davg
+        kpi_amount   += own
+        if c_text:
+            comp_texts.append(c_text)
+        if s_amt and own != s_amt:
+            print(f"  ⚠️ [한눈그래프] {t['store']} 자체집계({own:,})와 "
+                  f"시트1 I열({s_amt:,})이 다릅니다 — 요약은 시트1 값을 씁니다")
+
+        store_lines.append(
+            f"{t['store']} {(s_amt or own):,}원"
+            + (f"(공구 {len(exclude_ids)}개 제외)" if exclude_ids else "")
+        )
+        print(f"    · {t['store']}({t['row']}행): 시트1 {s_amt:,}원 / "
+              f"자체집계 {own:,}원 / 주문 {len(orders)}건")
+
+    if not all_orders:
         print("  [한눈그래프] 수집된 주문이 없어 건너뜁니다.")
         return
 
-    # 요약(7·8행)용 전체 집계 — 공구만 뺀 상태 (시트1과 같은 기준)
-    kpi_amount = sum(r["amount"] for r in orders)
-    kpi_orders = len(orders)
-    kpi_qty    = sum(r["qty"] for r in orders)
-    kpi_kinds  = len({dashboard.short_name(r["name"]) for r in orders})
-    if sheet_amount and kpi_amount != sheet_amount:
-        print(f"  ⚠️ [한눈그래프] 자체집계({kpi_amount:,})와 시트1 I열({sheet_amount:,})이 "
-              f"다릅니다 — 요약은 시트1 값을 씁니다")
+    # 앞에 +/- 를 그대로 두면 구글시트가 수식으로 읽어 #ERROR! 가 난다 → 화살표로 표시
+    def _arrow(v):
+        return "▲" if v > 0 else ("▼" if v < 0 else "―")
+
+    is_running = end_all >= today
+    if is_running:
+        # 진행 중: 집계일수(1일)와 비교기간(7일) 총액을 맞대면 항상 큰 마이너스로 보인다.
+        # → 시트1 D열(하루평균 증감)을 그대로 쓴다.
+        diff_label = "하루평균 증감"
+        diff_text = (f"{_arrow(sheet_davg)} {abs(sheet_davg):,}원/일"
+                     if sheet_davg else "집계 중")
+    else:
+        diff_label = "비교기간 대비"
+        if sheet_amount and sheet_comp:
+            diff = sheet_amount - sheet_comp
+            pct  = diff / sheet_comp * 100
+            diff_text = f"{_arrow(diff)} {abs(diff):,}원 ({abs(pct):.0f}%)"
+        else:
+            diff_text = "집계 중"
 
     # 표·그래프는 담당자가 제품 판매를 보려는 용도라 요청받은 제품만 뺀 사본으로 그린다
-    chart_orders, manual_excluded = dashboard.apply_manual_exclude(orders, title_base)
-
+    chart_orders, manual_excluded = dashboard.apply_manual_exclude(all_orders, title_base)
     if manual_excluded:
         print(f"  [한눈그래프] 표·그래프에서만 제외: {', '.join(manual_excluded)}")
-
     if not chart_orders:
         print("  [한눈그래프] 제외 후 남은 주문이 없어 건너뜁니다.")
         return
-    agg = dashboard.summarize(chart_orders)
+
+    agg = dashboard.summarize(chart_orders, with_store=len(targets) > 1)
 
     promo_info = {
         "manual_excluded": manual_excluded,
-        "comp_text": sheet_comp_text,
+        "comp_text": " / ".join(dict.fromkeys(comp_texts)),
         "comp_total": sheet_comp,
-        # 요약(7·8행) — 시트1과 동일한 매출 기준
+        # 요약(7·8행) — 시트1과 동일한 매출 기준 (여러 행이면 합계)
         "kpi": {
             "amount": sheet_amount or kpi_amount,
-            "orders": kpi_orders,
-            "qty": kpi_qty,
-            "kinds": kpi_kinds,
+            "orders": len(all_orders),
+            "qty": sum(o["qty"] for o in all_orders),
+            "kinds": len({
+                (f"{o.get('store','')}|" if len(targets) > 1 else "")
+                + dashboard.short_name(o["name"]) for o in all_orders
+            }),
         },
         "title": title_base,
-        "store": target["store"],
-        "start": target["start"],
-        "end": target["end"],
+        "store": " + ".join(t["store"] for t in targets),
+        "store_lines": store_lines,
+        "multi_store": len(targets) > 1,
+        "start": start_all,
+        "end": end_all,
         "total_days": total_days,
         "status_text": status_text,
         "diff_text": diff_text,
+        "diff_label": diff_label,
         "updated_at": datetime.now(KST).strftime("%Y-%m-%d %H:%M") + " (KST)",
     }
-    tab = dashboard.write_dashboard(spreadsheet, promo_info, agg, exclude_ids)
+    tab = dashboard.write_dashboard(spreadsheet, promo_info, agg,
+                                    sorted(set(exclude_all)))
     print(f"  ✅ '{tab}' 탭 갱신 완료 — 제품 {len(agg['products'])}종 / "
           f"주문 {sum(p['orders'] for p in agg['products']):,}건")
 
